@@ -5,7 +5,17 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 
-@Database(entities = [ActiveAnswer::class, InspectionRecord::class, FindingItem::class], version = 2, exportSchema = false)
+@Database(
+    entities = [
+        ActiveAnswer::class,
+        InspectionRecord::class,
+        FindingItem::class,
+        ActionHistoryLog::class,
+        AppNotification::class
+    ],
+    version = 3,
+    exportSchema = false
+)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun lsrDao(): LsrDao
 

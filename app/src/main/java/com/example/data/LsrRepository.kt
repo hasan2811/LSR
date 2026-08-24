@@ -23,6 +23,11 @@ class LsrRepository(private val lsrDao: LsrDao) {
     val activeAnswersFlow: Flow<List<ActiveAnswer>> = lsrDao.getActiveAnswersFlow()
     val inspectionRecordsFlow: Flow<List<InspectionRecord>> = lsrDao.getInspectionRecordsFlow()
     val findingsFlow: Flow<List<FindingItem>> = lsrDao.getFindingsFlow()
+    val notificationsFlow: Flow<List<AppNotification>> = lsrDao.getNotificationsFlow()
+    val unreadNotificationsCountFlow: Flow<Int> = lsrDao.getUnreadNotificationsCountFlow()
+    val allActionLogsFlow: Flow<List<ActionHistoryLog>> = lsrDao.getAllActionLogsFlow()
+
+    fun getActionLogsFlow(findingId: Int): Flow<List<ActionHistoryLog>> = lsrDao.getActionLogsFlow(findingId)
 
     private val okHttpClient = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
@@ -31,13 +36,23 @@ class LsrRepository(private val lsrDao: LsrDao) {
         .followSslRedirects(true)
         .build()
 
-    suspend fun saveActiveAnswer(questionId: String, answer: String, notes: String) {
+    suspend fun saveActiveAnswer(
+        questionId: String,
+        answer: String,
+        notes: String,
+        picName: String = "",
+        picEmail: String = "",
+        picRole: String = ""
+    ) {
         withContext(Dispatchers.IO) {
             lsrDao.insertActiveAnswer(
                 ActiveAnswer(
                     questionId = questionId,
                     answer = answer,
                     notes = notes,
+                    assignedPicName = picName,
+                    assignedPicEmail = picEmail,
+                    assignedPicRole = picRole,
                     updatedAt = System.currentTimeMillis()
                 )
             )
@@ -65,6 +80,317 @@ class LsrRepository(private val lsrDao: LsrDao) {
     suspend fun updateFinding(id: Int, status: String, correctiveAction: String) {
         withContext(Dispatchers.IO) {
             lsrDao.updateFinding(id, status, correctiveAction)
+        }
+    }
+
+    suspend fun assignFindingPic(
+        findingId: Int,
+        picName: String,
+        picEmail: String,
+        picRole: String,
+        actorName: String,
+        actorEmail: String = "",
+        actorRole: String = "Inspector"
+    ) {
+        withContext(Dispatchers.IO) {
+            val now = System.currentTimeMillis()
+            val existing = lsrDao.getFindingById(findingId) ?: return@withContext
+            
+            lsrDao.assignFindingPic(findingId, picName, picEmail, picRole, now)
+
+            // Record Action History Log
+            val log = ActionHistoryLog(
+                findingId = findingId,
+                ruleId = existing.ruleId,
+                actorName = actorName,
+                actorEmail = actorEmail,
+                actorRole = actorRole,
+                actionType = "ASSIGNED_TO_PIC",
+                oldStatus = existing.status,
+                newStatus = "OPEN",
+                notes = "Ditugaskan kepada PIC: $picName ($picRole)",
+                timestamp = now
+            )
+            lsrDao.insertActionLog(log)
+
+            // Create In-App Notification for PIC
+            val notif = AppNotification(
+                recipientEmail = picEmail,
+                recipientName = picName,
+                title = "⚠️ Tugas Temuan Baru: ${existing.ruleId}",
+                message = "Anda ditunjuk sebagai PIC untuk temuan ${existing.category} di ${existing.area}. Mohon tindak lanjuti tindakan perbaikan.",
+                type = "ASSIGNMENT",
+                findingId = findingId,
+                ruleId = existing.ruleId,
+                timestamp = now
+            )
+            lsrDao.insertNotification(notif)
+
+            // Sync to Firestore
+            try {
+                val db = FirebaseFirestore.getInstance()
+                val updateMap = mapOf(
+                    "assignedPicName" to picName,
+                    "assignedPicEmail" to picEmail,
+                    "assignedPicRole" to picRole,
+                    "assignedTimestamp" to now,
+                    "status" to "OPEN",
+                    "updatedAt" to now
+                )
+                db.collection("findings").document("finding_${existing.inspectionRecordId}_${existing.ruleId}")
+                    .set(updateMap, SetOptions.merge())
+
+                // Write log to subcollection
+                db.collection("findings").document("finding_${existing.inspectionRecordId}_${existing.ruleId}")
+                    .collection("action_logs").add(
+                        mapOf(
+                            "actionType" to "ASSIGNED_TO_PIC",
+                            "actorName" to actorName,
+                            "actorEmail" to actorEmail,
+                            "actorRole" to actorRole,
+                            "notes" to "Ditugaskan kepada PIC: $picName ($picRole)",
+                            "timestamp" to now
+                        )
+                    )
+            } catch (e: Exception) {
+                Log.d("LsrRepository", "Firestore assign update note: ${e.message}")
+            }
+        }
+    }
+
+    suspend fun submitPicAction(
+        findingId: Int,
+        correctiveAction: String,
+        evidenceNotes: String,
+        submittedBy: String,
+        submittedByEmail: String = "",
+        actorRole: String = "PIC / Field Team"
+    ) {
+        withContext(Dispatchers.IO) {
+            val now = System.currentTimeMillis()
+            val existing = lsrDao.getFindingById(findingId) ?: return@withContext
+
+            lsrDao.submitPicAction(findingId, correctiveAction, evidenceNotes, submittedBy, now)
+
+            // Record Action History Log
+            val log = ActionHistoryLog(
+                findingId = findingId,
+                ruleId = existing.ruleId,
+                actorName = submittedBy,
+                actorEmail = submittedByEmail,
+                actorRole = actorRole,
+                actionType = "ACTION_SUBMITTED",
+                oldStatus = existing.status,
+                newStatus = "ACTION_SUBMITTED",
+                notes = "Tindakan: $correctiveAction. Bukti: $evidenceNotes",
+                timestamp = now
+            )
+            lsrDao.insertActionLog(log)
+
+            // Create Notification for Inspector / Lead Auditor
+            val notif = AppNotification(
+                recipientEmail = existing.inspectorEmail,
+                recipientName = existing.inspectorName,
+                title = "🛠️ Tindakan Perbaikan Diajukan: ${existing.ruleId}",
+                message = "PIC $submittedBy telah mengajukan perbaikan untuk temuan di ${existing.area}. Silakan verifikasi dan beri rating kepuasan.",
+                type = "ACTION_SUBMITTED",
+                findingId = findingId,
+                ruleId = existing.ruleId,
+                timestamp = now
+            )
+            lsrDao.insertNotification(notif)
+
+            // Sync to Firestore
+            try {
+                val db = FirebaseFirestore.getInstance()
+                val updateMap = mapOf(
+                    "correctiveAction" to correctiveAction,
+                    "actionEvidenceNotes" to evidenceNotes,
+                    "actionSubmittedBy" to submittedBy,
+                    "actionSubmittedTimestamp" to now,
+                    "status" to "ACTION_SUBMITTED",
+                    "updatedAt" to now
+                )
+                db.collection("findings").document("finding_${existing.inspectionRecordId}_${existing.ruleId}")
+                    .set(updateMap, SetOptions.merge())
+
+                db.collection("findings").document("finding_${existing.inspectionRecordId}_${existing.ruleId}")
+                    .collection("action_logs").add(
+                        mapOf(
+                            "actionType" to "ACTION_SUBMITTED",
+                            "actorName" to submittedBy,
+                            "actorEmail" to submittedByEmail,
+                            "actorRole" to actorRole,
+                            "notes" to "Tindakan: $correctiveAction. Bukti: $evidenceNotes",
+                            "timestamp" to now
+                        )
+                    )
+            } catch (e: Exception) {
+                Log.d("LsrRepository", "Firestore action update note: ${e.message}")
+            }
+        }
+    }
+
+    suspend fun verifyAndCloseFinding(
+        findingId: Int,
+        verifiedBy: String,
+        verifiedByEmail: String = "",
+        rating: Int,
+        comment: String,
+        actorRole: String = "Lead Auditor / HSE Inspector"
+    ) {
+        withContext(Dispatchers.IO) {
+            val now = System.currentTimeMillis()
+            val existing = lsrDao.getFindingById(findingId) ?: return@withContext
+
+            lsrDao.verifyAndCloseFinding(findingId, verifiedBy, now, rating, comment)
+
+            // Record Action History Log
+            val log = ActionHistoryLog(
+                findingId = findingId,
+                ruleId = existing.ruleId,
+                actorName = verifiedBy,
+                actorEmail = verifiedByEmail,
+                actorRole = actorRole,
+                actionType = "VERIFIED_AND_CLOSED",
+                oldStatus = existing.status,
+                newStatus = "CLOSED",
+                notes = "Diverifikasi & Ditutup. Ulasan: $comment",
+                rating = rating,
+                timestamp = now
+            )
+            lsrDao.insertActionLog(log)
+
+            // Create Notification for PIC
+            val notif = AppNotification(
+                recipientEmail = existing.assignedPicEmail,
+                recipientName = existing.assignedPicName,
+                title = "✅ Temuan Ditutup & Dinilai [Rating: $rating/5 ⭐]",
+                message = "Temuan ${existing.ruleId} di ${existing.area} telah diverifikasi dan resmi DITUTUP oleh $verifiedBy. Rating kepuasan: $rating/5 Bintang.",
+                type = "CLOSED",
+                findingId = findingId,
+                ruleId = existing.ruleId,
+                timestamp = now
+            )
+            lsrDao.insertNotification(notif)
+
+            // Sync to Firestore
+            try {
+                val db = FirebaseFirestore.getInstance()
+                val updateMap = mapOf(
+                    "status" to "CLOSED",
+                    "verifiedBy" to verifiedBy,
+                    "verifiedTimestamp" to now,
+                    "satisfactionRating" to rating,
+                    "inspectorComment" to comment,
+                    "closedAt" to now,
+                    "updatedAt" to now
+                )
+                db.collection("findings").document("finding_${existing.inspectionRecordId}_${existing.ruleId}")
+                    .set(updateMap, SetOptions.merge())
+
+                db.collection("findings").document("finding_${existing.inspectionRecordId}_${existing.ruleId}")
+                    .collection("action_logs").add(
+                        mapOf(
+                            "actionType" to "VERIFIED_AND_CLOSED",
+                            "actorName" to verifiedBy,
+                            "actorEmail" to verifiedByEmail,
+                            "actorRole" to actorRole,
+                            "notes" to "Diverifikasi & Ditutup. Rating: $rating/5 Bintang. Ulasan: $comment",
+                            "rating" to rating,
+                            "timestamp" to now
+                        )
+                    )
+            } catch (e: Exception) {
+                Log.d("LsrRepository", "Firestore close update note: ${e.message}")
+            }
+        }
+    }
+
+    suspend fun reopenFinding(
+        findingId: Int,
+        reopenReason: String,
+        actorName: String,
+        actorEmail: String = "",
+        actorRole: String = "Lead Auditor / HSE Inspector"
+    ) {
+        withContext(Dispatchers.IO) {
+            val now = System.currentTimeMillis()
+            val existing = lsrDao.getFindingById(findingId) ?: return@withContext
+
+            lsrDao.reopenFinding(findingId, reopenReason)
+
+            // Record Action History Log
+            val log = ActionHistoryLog(
+                findingId = findingId,
+                ruleId = existing.ruleId,
+                actorName = actorName,
+                actorEmail = actorEmail,
+                actorRole = actorRole,
+                actionType = "REOPENED_BY_INSPECTOR",
+                oldStatus = existing.status,
+                newStatus = "REOPENED",
+                notes = "Temuan ditolak & dibuka kembali. Alasan: $reopenReason",
+                timestamp = now
+            )
+            lsrDao.insertActionLog(log)
+
+            // Create Notification for PIC
+            val notif = AppNotification(
+                recipientEmail = existing.assignedPicEmail,
+                recipientName = existing.assignedPicName,
+                title = "🔄 Temuan Dibuka Kembali (Perlu Perbaikan Ulang)",
+                message = "Tindakan perbaikan untuk ${existing.ruleId} di ${existing.area} belum memenuhi standar. Catatan auditor: \"$reopenReason\".",
+                type = "REOPENED",
+                findingId = findingId,
+                ruleId = existing.ruleId,
+                timestamp = now
+            )
+            lsrDao.insertNotification(notif)
+
+            // Sync to Firestore
+            try {
+                val db = FirebaseFirestore.getInstance()
+                val updateMap = mapOf(
+                    "status" to "REOPENED",
+                    "reopenReason" to reopenReason,
+                    "updatedAt" to now
+                )
+                db.collection("findings").document("finding_${existing.inspectionRecordId}_${existing.ruleId}")
+                    .set(updateMap, SetOptions.merge())
+
+                db.collection("findings").document("finding_${existing.inspectionRecordId}_${existing.ruleId}")
+                    .collection("action_logs").add(
+                        mapOf(
+                            "actionType" to "REOPENED_BY_INSPECTOR",
+                            "actorName" to actorName,
+                            "actorEmail" to actorEmail,
+                            "actorRole" to actorRole,
+                            "notes" to "Temuan ditolak & dibuka kembali. Alasan: $reopenReason",
+                            "timestamp" to now
+                        )
+                    )
+            } catch (e: Exception) {
+                Log.d("LsrRepository", "Firestore reopen update note: ${e.message}")
+            }
+        }
+    }
+
+    suspend fun markNotificationRead(id: Int) {
+        withContext(Dispatchers.IO) {
+            lsrDao.markNotificationRead(id)
+        }
+    }
+
+    suspend fun markAllNotificationsRead() {
+        withContext(Dispatchers.IO) {
+            lsrDao.markAllNotificationsRead()
+        }
+    }
+
+    suspend fun clearNotifications() {
+        withContext(Dispatchers.IO) {
+            lsrDao.clearNotifications()
         }
     }
 
@@ -149,27 +475,86 @@ class LsrRepository(private val lsrDao: LsrDao) {
                     val standardRef = q?.standard_ref ?: "IOGP LSR"
                     val isCritical = q?.is_critical ?: false
 
-                    newFindings.add(
-                        FindingItem(
-                            inspectionRecordId = recordId,
-                            ruleId = ruleId,
-                            category = category,
-                            itemText = itemText,
-                            standardRef = standardRef,
-                            isCritical = isCritical,
-                            inspectorName = inspectorName,
-                            area = area,
-                            notes = ans.notes,
-                            correctiveAction = "",
-                            status = "OPEN",
-                            timestamp = now,
-                            isSynced = false
-                        )
+                    val hasAssignedPic = ans.assignedPicName.isNotBlank()
+                    val picName = if (hasAssignedPic) ans.assignedPicName else "Unassigned / HSE Field Team"
+                    val picEmail = ans.assignedPicEmail
+                    val picRole = if (hasAssignedPic) ans.assignedPicRole else "PIC"
+
+                    val finding = FindingItem(
+                        inspectionRecordId = recordId,
+                        ruleId = ruleId,
+                        category = category,
+                        itemText = itemText,
+                        standardRef = standardRef,
+                        isCritical = isCritical,
+                        inspectorName = inspectorName,
+                        inspectorEmail = userEmail,
+                        inspectorUid = userUid,
+                        area = area,
+                        notes = ans.notes,
+                        assignedPicName = picName,
+                        assignedPicEmail = picEmail,
+                        assignedPicRole = picRole,
+                        assignedTimestamp = if (hasAssignedPic) now else 0L,
+                        correctiveAction = "",
+                        status = "OPEN",
+                        timestamp = now,
+                        isSynced = false
                     )
+                    newFindings.add(finding)
                 }
 
                 if (newFindings.isNotEmpty()) {
                     lsrDao.insertFindings(newFindings)
+
+                    // Also generate Action History Logs & Notifications for each finding
+                    val initialLogs = mutableListOf<ActionHistoryLog>()
+                    newFindings.forEach { finding ->
+                        initialLogs.add(
+                            ActionHistoryLog(
+                                findingId = finding.id,
+                                ruleId = finding.ruleId,
+                                actorName = inspectorName,
+                                actorEmail = userEmail,
+                                actorRole = "Inspector / Auditor",
+                                actionType = "CREATED_NON_COMPLIANT",
+                                oldStatus = "",
+                                newStatus = "OPEN",
+                                notes = "Temuan ketidakpatuhan dicatat saat audit lapangan. Catatan: ${finding.notes.ifBlank { "Kondisi tidak memenuhi standar LSR." }}",
+                                timestamp = now
+                            )
+                        )
+                        if (finding.assignedPicName.isNotBlank() && finding.assignedPicName != "Unassigned / HSE Field Team") {
+                            initialLogs.add(
+                                ActionHistoryLog(
+                                    findingId = finding.id,
+                                    ruleId = finding.ruleId,
+                                    actorName = inspectorName,
+                                    actorEmail = userEmail,
+                                    actorRole = "Inspector / Auditor",
+                                    actionType = "ASSIGNED_TO_PIC",
+                                    oldStatus = "OPEN",
+                                    newStatus = "OPEN",
+                                    notes = "Ditugaskan kepada PIC: ${finding.assignedPicName} (${finding.assignedPicRole})",
+                                    timestamp = now
+                                )
+                            )
+                            // Notification for PIC
+                            lsrDao.insertNotification(
+                                AppNotification(
+                                    recipientEmail = finding.assignedPicEmail,
+                                    recipientName = finding.assignedPicName,
+                                    title = "⚠️ Tugas Temuan Baru: ${finding.ruleId}",
+                                    message = "Anda ditugaskan sebagai PIC untuk perbaikan di area $area oleh $inspectorName.",
+                                    type = "ASSIGNMENT",
+                                    findingId = finding.id,
+                                    ruleId = finding.ruleId,
+                                    timestamp = now
+                                )
+                            )
+                        }
+                    }
+                    lsrDao.insertActionLogs(initialLogs)
                 }
 
                 // Construct Standard JSON Payload

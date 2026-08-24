@@ -66,6 +66,9 @@ fun LsrInspectionApp(
     val activeAnswers by viewModel.activeAnswers.collectAsState()
     val historyRecords by viewModel.historyRecords.collectAsState()
     val findings by viewModel.findings.collectAsState()
+    val notifications by viewModel.notifications.collectAsState()
+    val unreadNotificationsCount by viewModel.unreadNotificationsCount.collectAsState()
+    val teamRoster = viewModel.teamRoster
     val inspectorName by viewModel.inspectorName.collectAsState()
     val area by viewModel.area.collectAsState()
     val companyName by viewModel.companyName.collectAsState()
@@ -145,17 +148,30 @@ fun LsrInspectionApp(
                             )
                         )
 
-                        // Tab 2: Feed
+                        // Tab 2: Feed & Notifications (with unread badge)
                         val isFeedSelected = currentTab == AppNavTab.FEED
                         NavigationBarItem(
                             selected = isFeedSelected,
                             onClick = { viewModel.selectTab(AppNavTab.FEED) },
                             icon = {
-                                Icon(
-                                    if (isFeedSelected) Icons.Filled.DynamicFeed else Icons.Outlined.DynamicFeed,
-                                    contentDescription = AppStrings.get("tab_feed", appLanguage),
-                                    modifier = Modifier.size(24.dp)
-                                )
+                                BadgedBox(
+                                    badge = {
+                                        if (unreadNotificationsCount > 0) {
+                                            Badge(
+                                                containerColor = SafetyBlue,
+                                                contentColor = Color.White
+                                            ) {
+                                                Text("$unreadNotificationsCount", fontWeight = FontWeight.Bold)
+                                            }
+                                        }
+                                    }
+                                ) {
+                                    Icon(
+                                        if (isFeedSelected) Icons.Filled.DynamicFeed else Icons.Outlined.DynamicFeed,
+                                        contentDescription = AppStrings.get("tab_feed", appLanguage),
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                }
                             },
                             label = {
                                 Text(
@@ -273,6 +289,7 @@ fun LsrInspectionApp(
                         activeAnswers = activeAnswers,
                         currentQuestion = currentQuestion,
                         answerData = currentAnswerData,
+                        teamRoster = teamRoster,
                         currentIndex = safeIndex,
                         totalQuestions = filteredChecklistItems.size,
                         inspectorInitials = if (inspectorName.isNotBlank()) inspectorName.take(2).uppercase() else "IN",
@@ -282,6 +299,9 @@ fun LsrInspectionApp(
                         },
                         onNotesChanged = { notes ->
                             viewModel.updateAnswer(currentQuestion.id, currentAnswerData.answer, notes)
+                        },
+                        onPicSelected = { member ->
+                            viewModel.setPicForQuestion(currentQuestion.id, member)
                         },
                         onPrevClicked = { viewModel.prevQuestion() },
                         onNextClicked = {
@@ -343,13 +363,32 @@ fun LsrInspectionApp(
                                     language = appLanguage,
                                     historyRecords = historyRecords,
                                     checklistItems = checklistItems,
-                                    onRecordClicked = { record -> showRecordDetailDialog = record }
+                                    notifications = notifications,
+                                    unreadCount = unreadNotificationsCount,
+                                    onRecordClicked = { record -> showRecordDetailDialog = record },
+                                    onMarkNotificationRead = { id -> viewModel.markNotificationRead(id) },
+                                    onMarkAllNotificationsRead = { viewModel.markAllNotificationsRead() },
+                                    onClearNotifications = { viewModel.clearNotifications() }
                                 )
                             }
                             AppNavTab.FINDINGS -> {
                                 FindingsScreen(
                                     language = appLanguage,
                                     findings = findings,
+                                    teamRoster = teamRoster,
+                                    onGetActionLogs = { findingId -> viewModel.getActionLogsFlow(findingId) },
+                                    onAssignPic = { findingId, name, email, role ->
+                                        viewModel.assignPicToFinding(findingId, name, email, role)
+                                    },
+                                    onSubmitPicAction = { findingId, action, evidence ->
+                                        viewModel.submitPicAction(findingId, action, evidence)
+                                    },
+                                    onVerifyAndClose = { findingId, rating, comment ->
+                                        viewModel.verifyAndCloseFinding(findingId, rating, comment)
+                                    },
+                                    onReopenFinding = { findingId, reason ->
+                                        viewModel.reopenFinding(findingId, reason)
+                                    },
                                     onUpdateStatus = { id, status, action ->
                                         viewModel.updateFindingStatus(id, status, action)
                                     },
@@ -517,12 +556,14 @@ fun SurveyView(
     activeAnswers: Map<String, AnswerData>,
     currentQuestion: LsrItem,
     answerData: AnswerData,
+    teamRoster: List<TeamRosterMember> = emptyList(),
     currentIndex: Int,
     totalQuestions: Int,
     inspectorInitials: String,
     onSelectQuestionIndex: (Int) -> Unit,
     onAnswerSelected: (AnswerType) -> Unit,
     onNotesChanged: (String) -> Unit,
+    onPicSelected: (TeamRosterMember) -> Unit = {},
     onPrevClicked: () -> Unit,
     onNextClicked: () -> Unit,
     onSaveDraft: () -> Unit,
@@ -947,6 +988,112 @@ fun SurveyView(
                             minLines = 2,
                             maxLines = 4
                         )
+
+                        // PIC Assignment Block for Non-Compliant (NO) Findings
+                        if (answerData.answer == AnswerType.NO) {
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Surface(
+                                shape = RoundedCornerShape(14.dp),
+                                color = DangerRed.copy(alpha = 0.08f),
+                                border = BorderStroke(1.dp, DangerRed.copy(alpha = 0.3f)),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Icon(Icons.Default.PersonSearch, contentDescription = null, tint = DangerRed, modifier = Modifier.size(16.dp))
+                                        Text(
+                                            text = if (language == AppLanguage.ID) "Penugasan PIC Tindakan Koreksi (Wajib):" else "Assigned PIC for Corrective Action (Required):",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = DangerRed
+                                        )
+                                    }
+
+                                    if (answerData.assignedPicName.isNotBlank()) {
+                                        Surface(
+                                            shape = RoundedCornerShape(8.dp),
+                                            color = DangerRed,
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            Row(
+                                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.SpaceBetween
+                                            ) {
+                                                Column {
+                                                    Text(
+                                                        text = "PIC: ${answerData.assignedPicName} (${answerData.assignedPicRole})",
+                                                        color = Color.White,
+                                                        fontSize = 11.sp,
+                                                        fontWeight = FontWeight.Bold
+                                                    )
+                                                    Text(
+                                                        text = answerData.assignedPicEmail,
+                                                        color = Color.White.copy(alpha = 0.85f),
+                                                        fontSize = 10.sp
+                                                    )
+                                                }
+                                                Icon(Icons.Default.CheckCircle, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
+                                            }
+                                        }
+                                    } else {
+                                        Text(
+                                            text = if (language == AppLanguage.ID) "Pilih salah satu PIC penanggung jawab di bawah:" else "Select an assigned PIC below:",
+                                            fontSize = 11.sp,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+
+                                    // Team Roster Quick Chips
+                                    LazyRow(
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        items(teamRoster) { member ->
+                                            val isSelected = answerData.assignedPicEmail == member.email
+                                            Surface(
+                                                shape = RoundedCornerShape(10.dp),
+                                                color = if (isSelected) DangerRed else MaterialTheme.colorScheme.surface,
+                                                border = BorderStroke(1.dp, if (isSelected) DangerRed else MaterialTheme.colorScheme.outlineVariant),
+                                                modifier = Modifier.clickable { onPicSelected(member) }
+                                            ) {
+                                                Row(
+                                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                                ) {
+                                                    Icon(
+                                                        Icons.Default.Person,
+                                                        contentDescription = null,
+                                                        tint = if (isSelected) Color.White else DangerRed,
+                                                        modifier = Modifier.size(12.dp)
+                                                    )
+                                                    Column {
+                                                        Text(
+                                                            text = member.name,
+                                                            fontSize = 10.sp,
+                                                            fontWeight = FontWeight.Bold,
+                                                            color = if (isSelected) Color.White else MaterialTheme.colorScheme.onSurface
+                                                        )
+                                                        Text(
+                                                            text = member.role,
+                                                            fontSize = 8.sp,
+                                                            color = if (isSelected) Color.White.copy(alpha = 0.8f) else MaterialTheme.colorScheme.onSurfaceVariant
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }

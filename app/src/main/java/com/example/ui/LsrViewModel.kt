@@ -108,6 +108,29 @@ class LsrViewModel(application: Application) : AndroidViewModel(application) {
     val findings: StateFlow<List<FindingItem>> = repository.findingsFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    // Notifications & Audit History Logs
+    val notifications: StateFlow<List<AppNotification>> = repository.notificationsFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val unreadNotificationsCount: StateFlow<Int> = repository.unreadNotificationsCountFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
+
+    val allActionLogs: StateFlow<List<ActionHistoryLog>> = repository.allActionLogsFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    fun getActionLogsFlow(findingId: Int): Flow<List<ActionHistoryLog>> = repository.getActionLogsFlow(findingId)
+
+    // Pre-registered enterprise team roster for PIC selection
+    val teamRoster: List<TeamRosterMember> = listOf(
+        TeamRosterMember("Ahmad Fauzi", "ahmad.fauzi@company.com", "Rig Mechanical Supervisor", "Maintenance & Drilling"),
+        TeamRosterMember("Budi Santoso", "budi.santoso@company.com", "Lead Electrical Engineer", "Electrical & Instrumentation"),
+        TeamRosterMember("Siti Rahma", "siti.rahma@company.com", "Scaffolding Inspector & Lead", "Civil & Scaffolding"),
+        TeamRosterMember("Doni Prasetyo", "doni.prasetyo@company.com", "Production Field Supervisor", "Field Operations"),
+        TeamRosterMember("Hendra Wijaya", "hendra.wijaya@company.com", "Safety & Fire Officer", "HSSE Department"),
+        TeamRosterMember("Rian Kurniawan", "rian.kurniawan@company.com", "Lifting Specialist", "Logistics & Material Handling"),
+        TeamRosterMember("Eko Wahyudi", "eko.wahyudi@company.com", "Confined Space Lead", "Safety & Operations")
+    )
+
     // UI Status
     private val _uiMessage = MutableSharedFlow<String>()
     val uiMessage: SharedFlow<String> = _uiMessage.asSharedFlow()
@@ -127,7 +150,14 @@ class LsrViewModel(application: Application) : AndroidViewModel(application) {
                         "NA" -> AnswerType.NA
                         else -> AnswerType.UNANSWERED
                     }
-                    item.id to AnswerData(item.id, answerType, saved?.notes ?: "")
+                    item.id to AnswerData(
+                        id = item.id,
+                        answer = answerType,
+                        notes = saved?.notes ?: "",
+                        assignedPicName = saved?.assignedPicName ?: "",
+                        assignedPicEmail = saved?.assignedPicEmail ?: "",
+                        assignedPicRole = saved?.assignedPicRole ?: ""
+                    )
                 }
             }.collect { map ->
                 _activeAnswers.value = map
@@ -401,9 +431,28 @@ class LsrViewModel(application: Application) : AndroidViewModel(application) {
         _isInspecting.value = false
     }
 
-    fun updateAnswer(questionId: String, answer: AnswerType, notes: String) {
+    fun updateAnswer(
+        questionId: String,
+        answer: AnswerType,
+        notes: String,
+        picName: String = "",
+        picEmail: String = "",
+        picRole: String = ""
+    ) {
         val currentMap = _activeAnswers.value.toMutableMap()
-        currentMap[questionId] = AnswerData(questionId, answer, notes)
+        val existing = currentMap[questionId]
+        val resolvedPicName = if (picName.isNotBlank()) picName else (existing?.assignedPicName ?: "")
+        val resolvedPicEmail = if (picEmail.isNotBlank()) picEmail else (existing?.assignedPicEmail ?: "")
+        val resolvedPicRole = if (picRole.isNotBlank()) picRole else (existing?.assignedPicRole ?: "")
+
+        currentMap[questionId] = AnswerData(
+            id = questionId,
+            answer = answer,
+            notes = notes,
+            assignedPicName = resolvedPicName,
+            assignedPicEmail = resolvedPicEmail,
+            assignedPicRole = resolvedPicRole
+        )
         _activeAnswers.value = currentMap
 
         // Save immediately to Room draft
@@ -411,8 +460,166 @@ class LsrViewModel(application: Application) : AndroidViewModel(application) {
             repository.saveActiveAnswer(
                 questionId = questionId,
                 answer = answer.name,
-                notes = notes
+                notes = notes,
+                picName = resolvedPicName,
+                picEmail = resolvedPicEmail,
+                picRole = resolvedPicRole
             )
+        }
+    }
+
+    fun setPicForQuestion(questionId: String, member: TeamRosterMember) {
+        val currentMap = _activeAnswers.value.toMutableMap()
+        val current = currentMap[questionId] ?: AnswerData(questionId, AnswerType.UNANSWERED, "")
+        val updated = current.copy(
+            assignedPicName = member.name,
+            assignedPicEmail = member.email,
+            assignedPicRole = member.role
+        )
+        currentMap[questionId] = updated
+        _activeAnswers.value = currentMap
+
+        viewModelScope.launch {
+            repository.saveActiveAnswer(
+                questionId = questionId,
+                answer = updated.answer.name,
+                notes = updated.notes,
+                picName = member.name,
+                picEmail = member.email,
+                picRole = member.role
+            )
+        }
+    }
+
+    fun assignPicToFinding(
+        findingId: Int,
+        picName: String,
+        picEmail: String,
+        picRole: String
+    ) {
+        viewModelScope.launch {
+            val user = currentUser.value
+            val actor = if (_inspectorName.value.isNotBlank()) _inspectorName.value else (user?.displayName ?: "Inspector")
+            val email = user?.email ?: ""
+            val role = if (_inspectorRole.value.isNotBlank()) _inspectorRole.value else "Lead Auditor"
+
+            repository.assignFindingPic(
+                findingId = findingId,
+                picName = picName,
+                picEmail = picEmail,
+                picRole = picRole,
+                actorName = actor,
+                actorEmail = email,
+                actorRole = role
+            )
+            val msg = if (_appLanguage.value == AppLanguage.ID) {
+                "Temuan berhasil ditugaskan kepada PIC: $picName"
+            } else {
+                "Finding successfully assigned to PIC: $picName"
+            }
+            _uiMessage.emit(msg)
+        }
+    }
+
+    fun submitPicAction(
+        findingId: Int,
+        correctiveAction: String,
+        evidenceNotes: String
+    ) {
+        viewModelScope.launch {
+            val user = currentUser.value
+            val actor = if (_inspectorName.value.isNotBlank()) _inspectorName.value else (user?.displayName ?: "Field PIC")
+            val email = user?.email ?: ""
+            val role = if (_inspectorRole.value.isNotBlank()) _inspectorRole.value else "PIC / Field Team"
+
+            repository.submitPicAction(
+                findingId = findingId,
+                correctiveAction = correctiveAction,
+                evidenceNotes = evidenceNotes,
+                submittedBy = actor,
+                submittedByEmail = email,
+                actorRole = role
+            )
+            val msg = if (_appLanguage.value == AppLanguage.ID) {
+                "Tindakan perbaikan berhasil diajukan untuk review auditor."
+            } else {
+                "Corrective action submitted for auditor review."
+            }
+            _uiMessage.emit(msg)
+        }
+    }
+
+    fun verifyAndCloseFinding(
+        findingId: Int,
+        rating: Int,
+        comment: String
+    ) {
+        viewModelScope.launch {
+            val user = currentUser.value
+            val actor = if (_inspectorName.value.isNotBlank()) _inspectorName.value else (user?.displayName ?: "Lead Auditor")
+            val email = user?.email ?: ""
+            val role = if (_inspectorRole.value.isNotBlank()) _inspectorRole.value else "Lead HSE Inspector"
+
+            repository.verifyAndCloseFinding(
+                findingId = findingId,
+                verifiedBy = actor,
+                verifiedByEmail = email,
+                rating = rating,
+                comment = comment,
+                actorRole = role
+            )
+            val msg = if (_appLanguage.value == AppLanguage.ID) {
+                "Temuan berhasil diverifikasi dan DITUTUP dengan Rating $rating ⭐"
+            } else {
+                "Finding verified and CLOSED with Rating $rating ⭐"
+            }
+            _uiMessage.emit(msg)
+        }
+    }
+
+    fun reopenFinding(
+        findingId: Int,
+        reopenReason: String
+    ) {
+        viewModelScope.launch {
+            val user = currentUser.value
+            val actor = if (_inspectorName.value.isNotBlank()) _inspectorName.value else (user?.displayName ?: "Lead Auditor")
+            val email = user?.email ?: ""
+            val role = if (_inspectorRole.value.isNotBlank()) _inspectorRole.value else "Lead HSE Inspector"
+
+            repository.reopenFinding(
+                findingId = findingId,
+                reopenReason = reopenReason,
+                actorName = actor,
+                actorEmail = email,
+                actorRole = role
+            )
+            val msg = if (_appLanguage.value == AppLanguage.ID) {
+                "Temuan ditolak dan dibuka kembali untuk perbaikan ulang."
+            } else {
+                "Finding rejected and reopened for corrective revision."
+            }
+            _uiMessage.emit(msg)
+        }
+    }
+
+    fun markNotificationRead(id: Int) {
+        viewModelScope.launch {
+            repository.markNotificationRead(id)
+        }
+    }
+
+    fun markAllNotificationsRead() {
+        viewModelScope.launch {
+            repository.markAllNotificationsRead()
+            val msg = if (_appLanguage.value == AppLanguage.ID) "Semua notifikasi ditandai telah dibaca." else "All notifications marked as read."
+            _uiMessage.emit(msg)
+        }
+    }
+
+    fun clearNotifications() {
+        viewModelScope.launch {
+            repository.clearNotifications()
         }
     }
 
@@ -519,7 +726,10 @@ class LsrViewModel(application: Application) : AndroidViewModel(application) {
                     ActiveAnswer(
                         questionId = it.id,
                         answer = it.answer.name,
-                        notes = it.notes
+                        notes = it.notes,
+                        assignedPicName = it.assignedPicName,
+                        assignedPicEmail = it.assignedPicEmail,
+                        assignedPicRole = it.assignedPicRole
                     )
                 }
 
