@@ -44,6 +44,8 @@ fun DashboardScreen(
     historyRecords: List<InspectionRecord>,
     findings: List<FindingItem>,
     currentUser: UserProfile?,
+    activeProject: FirestoreProject? = null,
+    onOpenProjectDialog: () -> Unit = {},
     selectedCategories: Set<String>,
     availableCategories: List<String>,
     onToggleCategory: (String) -> Unit,
@@ -209,6 +211,83 @@ fun DashboardScreen(
                     fontWeight = FontWeight.Black,
                     color = SafetyBlue
                 )
+            }
+        }
+
+        // Active Firestore Project Workspace Card
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = if (activeProject != null) SafetyBlue.copy(alpha = 0.08f) else AmberGold.copy(alpha = 0.08f),
+            border = BorderStroke(1.dp, if (activeProject != null) SafetyBlue.copy(alpha = 0.35f) else AmberGold.copy(alpha = 0.35f)),
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { onOpenProjectDialog() }
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = if (activeProject != null) SafetyBlue else AmberGold,
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                Icons.Default.FolderSpecial,
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    }
+
+                    Column {
+                        Text(
+                            text = if (language == AppLanguage.ID) "Workspace Proyek Firestore" else "Firestore Project Workspace",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = activeProject?.name ?: (if (language == AppLanguage.ID) "Pilih Proyek..." else "Select Project..."),
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Black,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        if (activeProject != null) {
+                            Text(
+                                text = "👥 ${activeProject.memberUids.size} Personil • 📍 ${activeProject.customLocations.size} Lokasi",
+                                fontSize = 10.sp,
+                                color = SafetyTeal
+                            )
+                        }
+                    }
+                }
+
+                FilledTonalButton(
+                    onClick = onOpenProjectDialog,
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                    shape = RoundedCornerShape(10.dp),
+                    colors = ButtonDefaults.filledTonalButtonColors(
+                        containerColor = SafetyBlue.copy(alpha = 0.15f),
+                        contentColor = SafetyBlue
+                    )
+                ) {
+                    Text(
+                        text = if (language == AppLanguage.ID) "Ganti" else "Switch",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
             }
         }
 

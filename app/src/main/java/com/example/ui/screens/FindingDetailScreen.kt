@@ -943,21 +943,37 @@ fun AssignPicModalDialog(
     var customRole by remember { mutableStateOf("") }
     var customEmail by remember { mutableStateOf("") }
     var isCustomMode by remember { mutableStateOf(false) }
+    var searchPicQuery by remember { mutableStateOf("") }
 
-    Dialog(onDismissRequest = onDismiss) {
+    val filteredRoster = remember(teamRoster, searchPicQuery) {
+        val clean = searchPicQuery.trim().lowercase()
+        if (clean.isBlank()) teamRoster
+        else teamRoster.filter {
+            it.name.lowercase().contains(clean) ||
+            it.role.lowercase().contains(clean) ||
+            it.email.lowercase().contains(clean) ||
+            it.department.lowercase().contains(clean)
+        }
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
+    ) {
         Card(
-            shape = RoundedCornerShape(20.dp),
+            shape = RoundedCornerShape(24.dp),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
             elevation = CardDefaults.cardElevation(8.dp),
             modifier = Modifier
-                .fillMaxWidth()
+                .fillMaxWidth(0.95f)
+                .fillMaxHeight(0.85f)
                 .padding(8.dp)
         ) {
             Column(
                 modifier = Modifier
-                    .padding(20.dp)
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(14.dp)
+                    .fillMaxSize()
+                    .padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -988,7 +1004,7 @@ fun AssignPicModalDialog(
                     FilterChip(
                         selected = !isCustomMode,
                         onClick = { isCustomMode = false },
-                        label = { Text("Pilih Dari Roster Tim") },
+                        label = { Text("Roster Circle (${filteredRoster.size})") },
                         modifier = Modifier.weight(1f)
                     )
                     FilterChip(
@@ -1000,9 +1016,33 @@ fun AssignPicModalDialog(
                 }
 
                 if (!isCustomMode) {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        teamRoster.forEach { member ->
-                            val isSelected = selectedMember?.name == member.name
+                    OutlinedTextField(
+                        value = searchPicQuery,
+                        onValueChange = { searchPicQuery = it },
+                        placeholder = { Text("Cari nama, role, email PIC...", fontSize = 12.sp) },
+                        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                        trailingIcon = {
+                            if (searchPicQuery.isNotEmpty()) {
+                                IconButton(onClick = { searchPicQuery = "" }) {
+                                    Icon(Icons.Default.Clear, contentDescription = "Clear", modifier = Modifier.size(16.dp))
+                                }
+                            }
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(50.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        singleLine = true
+                    )
+
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(filteredRoster, key = { it.email.ifBlank { it.name } }) { member ->
+                            val isSelected = selectedMember?.name == member.name || selectedMember?.email == member.email
                             Surface(
                                 shape = RoundedCornerShape(12.dp),
                                 color = if (isSelected) SafetyBlue.copy(alpha = 0.12f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
@@ -1019,7 +1059,7 @@ fun AssignPicModalDialog(
                                     Surface(
                                         shape = CircleShape,
                                         color = if (isSelected) SafetyBlue else MaterialTheme.colorScheme.outlineVariant,
-                                        modifier = Modifier.size(32.dp)
+                                        modifier = Modifier.size(36.dp)
                                     ) {
                                         Box(contentAlignment = Alignment.Center) {
                                             Text(
@@ -1043,6 +1083,13 @@ fun AssignPicModalDialog(
                                             fontSize = 11.sp,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
+                                        if (member.email.isNotBlank()) {
+                                            Text(
+                                                text = member.email,
+                                                fontSize = 10.sp,
+                                                color = SafetyBlue
+                                            )
+                                        }
                                     }
 
                                     if (isSelected) {
@@ -1053,7 +1100,12 @@ fun AssignPicModalDialog(
                         }
                     }
                 } else {
-                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
                         OutlinedTextField(
                             value = customName,
                             onValueChange = { customName = it },

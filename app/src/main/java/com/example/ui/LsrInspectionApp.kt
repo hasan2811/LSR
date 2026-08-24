@@ -69,6 +69,11 @@ fun LsrInspectionApp(
     val notifications by viewModel.notifications.collectAsState()
     val unreadNotificationsCount by viewModel.unreadNotificationsCount.collectAsState()
     val teamRoster = viewModel.teamRoster
+    val firestoreUsers by viewModel.firestoreUsers.collectAsState()
+    val firestoreProjects by viewModel.firestoreProjects.collectAsState()
+    val activeProject by viewModel.activeProject.collectAsState()
+    val combinedTeamRoster by viewModel.teamRosterFlow.collectAsState()
+
     val inspectorName by viewModel.inspectorName.collectAsState()
     val area by viewModel.area.collectAsState()
     val companyName by viewModel.companyName.collectAsState()
@@ -87,6 +92,7 @@ fun LsrInspectionApp(
     val authErrorMessage by viewModel.authErrorMessage.collectAsState()
 
     var showAuthDialog by remember { mutableStateOf(false) }
+    var showProjectSelectDialog by remember { mutableStateOf(false) }
     var showChecklistManagerDialog by remember { mutableStateOf(false) }
     var showGasGuideDialog by remember { mutableStateOf(false) }
     var showSubmitConfirmationDialog by remember { mutableStateOf(false) }
@@ -102,6 +108,36 @@ fun LsrInspectionApp(
         viewModel.uiMessage.collectLatest { message ->
             snackbarHostState.showSnackbar(message)
         }
+    }
+
+    // MANDATORY AUTHENTICATION GATE AT APP LAUNCH
+    if (currentUser == null) {
+        LoginGateScreen(
+            language = appLanguage,
+            isLoading = isAuthLoading,
+            errorMessage = authErrorMessage,
+            firestoreUsers = firestoreUsers,
+            firestoreProjects = firestoreProjects,
+            onLogin = { email, pass ->
+                viewModel.login(email, pass)
+            },
+            onQuickLogin = { selectedUser ->
+                viewModel.loginWithFirestoreUser(selectedUser)
+            },
+            onRegister = { email, pass, name, comp, role, cert ->
+                viewModel.register(email, pass, name, comp, role, cert)
+            },
+            onResetPassword = { email ->
+                viewModel.sendPasswordReset(email)
+            },
+            onClearError = {
+                viewModel.clearAuthError()
+            },
+            onToggleLanguage = {
+                viewModel.toggleLanguage()
+            }
+        )
+        return
     }
 
     Scaffold(
@@ -344,6 +380,8 @@ fun LsrInspectionApp(
                                     historyRecords = historyRecords,
                                     findings = findings,
                                     currentUser = currentUser,
+                                    activeProject = activeProject,
+                                    onOpenProjectDialog = { showProjectSelectDialog = true },
                                     selectedCategories = selectedCategories,
                                     availableCategories = availableCategories,
                                     onToggleCategory = { viewModel.toggleCategory(it) },
@@ -406,6 +444,8 @@ fun LsrInspectionApp(
                                     inspectorRole = inspectorRole,
                                     inspectorCert = inspectorCert,
                                     currentUser = currentUser,
+                                    activeProject = activeProject,
+                                    onOpenProjectDialog = { showProjectSelectDialog = true },
                                     scriptUrl = scriptUrl,
                                     isGasEnabled = isGasEnabled,
                                     firebaseUrl = firebaseUrl,
@@ -541,6 +581,40 @@ fun LsrInspectionApp(
             onDismiss = {
                 viewModel.clearAuthError()
                 showAuthDialog = false
+            }
+        )
+    }
+
+    if (showProjectSelectDialog) {
+        val currentFirestoreUser = firestoreUsers.find {
+            it.uid == currentUser?.uid || it.email.equals(currentUser?.email, ignoreCase = true)
+        }
+        val accessibleProjects = remember(firestoreProjects, currentUser, currentFirestoreUser) {
+            val uid = currentUser?.uid ?: ""
+            val userEmail = currentUser?.email ?: ""
+            val filtered = firestoreProjects.filter { proj ->
+                proj.isOpen ||
+                proj.ownerUid == uid ||
+                proj.memberUids.contains(uid) ||
+                (currentFirestoreUser?.projectIds?.contains(proj.id) == true)
+            }
+            if (filtered.isNotEmpty()) filtered else firestoreProjects
+        }
+
+        ProjectSelectionDialog(
+            language = appLanguage,
+            currentUser = currentUser,
+            currentFirestoreUser = currentFirestoreUser,
+            projects = accessibleProjects,
+            activeProject = activeProject,
+            onSelectProject = { proj ->
+                viewModel.selectActiveProject(proj)
+            },
+            onRefresh = {
+                viewModel.refreshFirestoreData()
+            },
+            onDismiss = {
+                showProjectSelectDialog = false
             }
         )
     }

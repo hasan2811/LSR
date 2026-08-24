@@ -19,6 +19,79 @@ class LsrViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = LsrRepository(database.lsrDao())
     val checklistStore = CustomChecklistStore(application)
     val authManager = FirebaseAuthManager(application)
+    val firestoreManager = FirestoreManager(application)
+
+    // Firestore Users & Projects
+    val firestoreUsers: StateFlow<List<FirestoreUser>> = firestoreManager.users
+    val firestoreProjects: StateFlow<List<FirestoreProject>> = firestoreManager.projects
+    val activeProject: StateFlow<FirestoreProject?> = firestoreManager.activeProject
+
+    // Dashboard Perspective / Role Filter
+    private val _dashboardPerspective = MutableStateFlow(DashboardPerspective.ALL)
+    val dashboardPerspective: StateFlow<DashboardPerspective> = _dashboardPerspective.asStateFlow()
+
+    fun setDashboardPerspective(perspective: DashboardPerspective) {
+        _dashboardPerspective.value = perspective
+    }
+
+    // Debounced User Search in Circle
+    private val _userSearchQuery = MutableStateFlow("")
+    val userSearchQuery: StateFlow<String> = _userSearchQuery.asStateFlow()
+
+    fun setUserSearchQuery(query: String) {
+        _userSearchQuery.value = query
+    }
+
+    // Circle Members (Strict project isolation)
+    val circleUsersFlow: StateFlow<List<FirestoreUser>> = combine(
+        firestoreManager.users,
+        firestoreManager.activeProject
+    ) { users, activeProj ->
+        val projId = activeProj?.id ?: ""
+        if (projId.isBlank() || activeProj?.isOpen == true) {
+            users
+        } else {
+            users.filter { u ->
+                (activeProj?.memberUids?.contains(u.uid) == true) ||
+                activeProj?.ownerUid == u.uid ||
+                u.projectIds.contains(projId)
+            }
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    // Debounced Searched Users Flow (300ms debounce)
+    @OptIn(kotlinx.coroutines.FlowPreview::class)
+    val searchedCircleUsers: StateFlow<List<FirestoreUser>> = _userSearchQuery
+        .debounce(300)
+        .combine(circleUsersFlow) { query, circleUsers ->
+            val clean = query.trim().lowercase()
+            if (clean.isBlank()) {
+                circleUsers
+            } else {
+                circleUsers.filter { u ->
+                    u.displayName.lowercase().contains(clean) ||
+                    u.email.lowercase().contains(clean) ||
+                    u.position.lowercase().contains(clean) ||
+                    u.company.lowercase().contains(clean)
+                }
+            }
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    // Dynamic combined team roster for PIC selection (Strictly isolated by active project circle)
+    val teamRosterFlow: StateFlow<List<TeamRosterMember>> = circleUsersFlow.map { fUsers ->
+        fUsers.map { u ->
+            TeamRosterMember(
+                name = u.displayName.ifBlank { u.email.substringBefore("@") },
+                email = u.email,
+                role = u.getEffectiveRole(),
+                department = u.getEffectiveCompany()
+            )
+        }.distinctBy { it.email.ifBlank { it.name } }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    // Backward compatibility property
+    val teamRoster: List<TeamRosterMember>
+        get() = teamRosterFlow.value.ifEmpty { firestoreManager.getTeamRosterFromUsers() }
 
     // Current Bottom Navigation Tab
     private val _currentTab = MutableStateFlow(AppNavTab.DASHBOARD)
@@ -119,17 +192,6 @@ class LsrViewModel(application: Application) : AndroidViewModel(application) {
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     fun getActionLogsFlow(findingId: Int): Flow<List<ActionHistoryLog>> = repository.getActionLogsFlow(findingId)
-
-    // Pre-registered enterprise team roster for PIC selection
-    val teamRoster: List<TeamRosterMember> = listOf(
-        TeamRosterMember("Ahmad Fauzi", "ahmad.fauzi@company.com", "Rig Mechanical Supervisor", "Maintenance & Drilling"),
-        TeamRosterMember("Budi Santoso", "budi.santoso@company.com", "Lead Electrical Engineer", "Electrical & Instrumentation"),
-        TeamRosterMember("Siti Rahma", "siti.rahma@company.com", "Scaffolding Inspector & Lead", "Civil & Scaffolding"),
-        TeamRosterMember("Doni Prasetyo", "doni.prasetyo@company.com", "Production Field Supervisor", "Field Operations"),
-        TeamRosterMember("Hendra Wijaya", "hendra.wijaya@company.com", "Safety & Fire Officer", "HSSE Department"),
-        TeamRosterMember("Rian Kurniawan", "rian.kurniawan@company.com", "Lifting Specialist", "Logistics & Material Handling"),
-        TeamRosterMember("Eko Wahyudi", "eko.wahyudi@company.com", "Confined Space Lead", "Safety & Operations")
-    )
 
     // UI Status
     private val _uiMessage = MutableSharedFlow<String>()
@@ -316,6 +378,76 @@ class LsrViewModel(application: Application) : AndroidViewModel(application) {
             val msg = if (_appLanguage.value == AppLanguage.ID) "Berhasil keluar dari akun Firebase." else "Signed out of Firebase account."
             _uiMessage.emit(msg)
         }
+    }
+
+    fun loginWithFirestoreUser(user: FirestoreUser, onSuccess: () -> Unit = {}) {
+        val profile = UserProfile(
+            uid = user.uid,
+            displayName = user.displayName.ifBlank { user.email.substringBefore("@") },
+            email = user.email,
+            company = user.getEffectiveCompany(),
+            role = user.getEffectiveRole(),
+            certification = "NEBOSH / AK3 Umum / IOGP"
+        )
+        authManager.loginDirectly(profile)
+
+        // Select first accessible project for this user
+        val accessibleProjects = firestoreManager.getAccessibleProjectsForUser(user.uid, user.email)
+        if (accessibleProjects.isNotEmpty()) {
+            val defaultProj = accessibleProjects.first()
+            firestoreManager.selectActiveProject(defaultProj)
+            if (defaultProj.customLocations.isNotEmpty()) {
+                _area.value = defaultProj.customLocations.first()
+            }
+            if (defaultProj.customCompanies.isNotEmpty()) {
+                _companyName.value = defaultProj.customCompanies.first()
+            }
+        }
+
+        viewModelScope.launch {
+            val msg = if (_appLanguage.value == AppLanguage.ID) {
+                "Masuk sebagai ${profile.displayName} (${profile.role})"
+            } else {
+                "Signed in as ${profile.displayName} (${profile.role})"
+            }
+            _uiMessage.emit(msg)
+            onSuccess()
+        }
+    }
+
+    fun selectActiveProject(project: FirestoreProject) {
+        firestoreManager.selectActiveProject(project)
+        if (project.customLocations.isNotEmpty() && _area.value.isBlank()) {
+            _area.value = project.customLocations.first()
+        }
+        if (project.customCompanies.isNotEmpty() && _companyName.value.isBlank()) {
+            _companyName.value = project.customCompanies.first()
+        }
+        viewModelScope.launch {
+            val msg = if (_appLanguage.value == AppLanguage.ID) {
+                "Workspace aktif: ${project.name}"
+            } else {
+                "Active workspace: ${project.name}"
+            }
+            _uiMessage.emit(msg)
+        }
+    }
+
+    fun refreshFirestoreData() {
+        firestoreManager.fetchAllNow()
+        viewModelScope.launch {
+            val msg = if (_appLanguage.value == AppLanguage.ID) {
+                "Data user & proyek Firestore diperbarui."
+            } else {
+                "Firestore users & projects refreshed."
+            }
+            _uiMessage.emit(msg)
+        }
+    }
+
+    fun getAccessibleProjects(): List<FirestoreProject> {
+        val user = currentUser.value ?: return emptyList()
+        return firestoreManager.getAccessibleProjectsForUser(user.uid, user.email)
     }
 
     fun clearAuthError() {
@@ -512,6 +644,35 @@ class LsrViewModel(application: Application) : AndroidViewModel(application) {
                 actorEmail = email,
                 actorRole = role
             )
+
+            // Sync denormalized finding and audit log to Firestore
+            val projId = activeProject.value?.id ?: "default_proj"
+            firestoreManager.saveFindingToFirestore(
+                FirestoreFindingDocument(
+                    id = "finding_$findingId",
+                    projectId = projId,
+                    picName = picName,
+                    picEmail = picEmail,
+                    picRole = picRole,
+                    creatorName = actor,
+                    creatorEmail = email,
+                    creatorRole = role,
+                    status = "OPEN"
+                )
+            )
+            firestoreManager.recordAuditActionLog(
+                FirestoreActionLog(
+                    findingId = "finding_$findingId",
+                    projectId = projId,
+                    actorName = actor,
+                    actorRole = role,
+                    actionType = "ASSIGNED_TO_PIC",
+                    oldStatus = "OPEN",
+                    newStatus = "OPEN",
+                    remarks = "Assigned to PIC $picName ($picRole)"
+                )
+            )
+
             val msg = if (_appLanguage.value == AppLanguage.ID) {
                 "Temuan berhasil ditugaskan kepada PIC: $picName"
             } else {
@@ -540,6 +701,31 @@ class LsrViewModel(application: Application) : AndroidViewModel(application) {
                 submittedByEmail = email,
                 actorRole = role
             )
+
+            val projId = activeProject.value?.id ?: "default_proj"
+            firestoreManager.saveFindingToFirestore(
+                FirestoreFindingDocument(
+                    id = "finding_$findingId",
+                    projectId = projId,
+                    actionTaken = correctiveAction,
+                    status = "IN_REVIEW",
+                    actionSubmittedByUid = user?.uid ?: "",
+                    actionSubmittedTimestamp = System.currentTimeMillis()
+                )
+            )
+            firestoreManager.recordAuditActionLog(
+                FirestoreActionLog(
+                    findingId = "finding_$findingId",
+                    projectId = projId,
+                    actorName = actor,
+                    actorRole = role,
+                    actionType = "ACTION_SUBMITTED",
+                    oldStatus = "OPEN",
+                    newStatus = "IN_REVIEW",
+                    remarks = correctiveAction
+                )
+            )
+
             val msg = if (_appLanguage.value == AppLanguage.ID) {
                 "Tindakan perbaikan berhasil diajukan untuk review auditor."
             } else {
@@ -568,6 +754,33 @@ class LsrViewModel(application: Application) : AndroidViewModel(application) {
                 comment = comment,
                 actorRole = role
             )
+
+            val projId = activeProject.value?.id ?: "default_proj"
+            firestoreManager.saveFindingToFirestore(
+                FirestoreFindingDocument(
+                    id = "finding_$findingId",
+                    projectId = projId,
+                    status = "CLOSED",
+                    picRating = rating,
+                    verificationRemarks = comment,
+                    verifiedByUid = user?.uid ?: "",
+                    verifiedTimestamp = System.currentTimeMillis()
+                )
+            )
+            firestoreManager.recordAuditActionLog(
+                FirestoreActionLog(
+                    findingId = "finding_$findingId",
+                    projectId = projId,
+                    actorName = actor,
+                    actorRole = role,
+                    actionType = "VERIFIED_AND_CLOSED",
+                    oldStatus = "IN_REVIEW",
+                    newStatus = "CLOSED",
+                    remarks = comment,
+                    rating = rating
+                )
+            )
+
             val msg = if (_appLanguage.value == AppLanguage.ID) {
                 "Temuan berhasil diverifikasi dan DITUTUP dengan Rating $rating ⭐"
             } else {
@@ -593,6 +806,27 @@ class LsrViewModel(application: Application) : AndroidViewModel(application) {
                 actorName = actor,
                 actorEmail = email,
                 actorRole = role
+            )
+
+            val projId = activeProject.value?.id ?: "default_proj"
+            firestoreManager.saveFindingToFirestore(
+                FirestoreFindingDocument(
+                    id = "finding_$findingId",
+                    projectId = projId,
+                    status = "REJECTED"
+                )
+            )
+            firestoreManager.recordAuditActionLog(
+                FirestoreActionLog(
+                    findingId = "finding_$findingId",
+                    projectId = projId,
+                    actorName = actor,
+                    actorRole = role,
+                    actionType = "REOPENED_BY_INSPECTOR",
+                    oldStatus = "IN_REVIEW",
+                    newStatus = "REJECTED",
+                    remarks = reopenReason
+                )
             )
             val msg = if (_appLanguage.value == AppLanguage.ID) {
                 "Temuan ditolak dan dibuka kembali untuk perbaikan ulang."

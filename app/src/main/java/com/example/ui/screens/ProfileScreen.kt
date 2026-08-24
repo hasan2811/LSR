@@ -23,10 +23,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.data.AppLanguage
-import com.example.data.AppStrings
-import com.example.data.GoogleAppsScriptSnippet
-import com.example.data.UserProfile
+import com.example.data.*
 import com.example.ui.components.HseBrandBadge
 import com.example.ui.theme.*
 
@@ -40,6 +37,8 @@ fun ProfileScreen(
     inspectorRole: String,
     inspectorCert: String,
     currentUser: UserProfile?,
+    activeProject: FirestoreProject? = null,
+    onOpenProjectDialog: () -> Unit = {},
     scriptUrl: String,
     isGasEnabled: Boolean,
     firebaseUrl: String,
@@ -191,6 +190,65 @@ fun ProfileScreen(
                                 color = Color(0xFF94A3B8),
                                 fontWeight = FontWeight.Medium
                             )
+                        }
+                    }
+
+                    // Active Firestore Project Banner inside Profile
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = Color(0xFF0F172A),
+                        border = BorderStroke(1.dp, SafetyBlue.copy(alpha = 0.4f)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.FolderSpecial,
+                                    contentDescription = null,
+                                    tint = SafetyBlue,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                                Column {
+                                    Text(
+                                        text = if (language == AppLanguage.ID) "Workspace Proyek Firestore" else "Firestore Project Workspace",
+                                        fontSize = 10.sp,
+                                        color = Color(0xFF94A3B8),
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                    Text(
+                                        text = activeProject?.name ?: (if (language == AppLanguage.ID) "Belum Dipilih" else "None Selected"),
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color.White
+                                    )
+                                }
+                            }
+
+                            FilledTonalButton(
+                                onClick = onOpenProjectDialog,
+                                shape = RoundedCornerShape(8.dp),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                                colors = ButtonDefaults.filledTonalButtonColors(
+                                    containerColor = SafetyBlue.copy(alpha = 0.2f),
+                                    contentColor = SafetyBlue
+                                )
+                            ) {
+                                Text(
+                                    text = if (language == AppLanguage.ID) "Ganti" else "Switch",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
                         }
                     }
 

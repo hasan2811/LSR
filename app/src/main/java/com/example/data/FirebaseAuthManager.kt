@@ -194,9 +194,27 @@ class FirebaseAuthManager(private val context: Context) {
         saveProfileToMainPrefs(updated)
     }
 
+    fun loginDirectly(profile: UserProfile) {
+        _currentUser.value = profile
+        prefs.edit().apply {
+            putString("company_${profile.uid}", profile.company)
+            putString("role_${profile.uid}", profile.role)
+            putString("cert_${profile.uid}", profile.certification)
+            apply()
+        }
+        saveProfileToMainPrefs(profile)
+    }
+
     fun signOut() {
-        auth.signOut()
+        try {
+            auth.signOut()
+        } catch (_: Exception) {}
         _currentUser.value = null
+        val mainPrefs = context.getSharedPreferences("lsr_prefs", Context.MODE_PRIVATE)
+        mainPrefs.edit().apply {
+            remove("inspector_uid")
+            apply()
+        }
     }
 
     private fun saveProfileToMainPrefs(profile: UserProfile) {
