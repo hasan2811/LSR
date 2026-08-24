@@ -1,0 +1,6 @@
+{
+  "name": "HSE LSR",
+  "description": "A comprehensive checklist inspection app based on IOGP Life-Saving Rules and OSHA standards.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

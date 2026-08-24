@@ -1,0 +1,296 @@
+[
+  {
+    "id": "LSR-WAH-01",
+    "category": "Working at Height",
+    "item_text": "Apakah semua pekerja di ketinggian (>1.8m) telah menggunakan Full Body Harness dengan double lanyard yang dicantolkan pada anchor point yang kokoh (kapasitas beban min. 22 kN)?",
+    "standard_ref": "OSHA 1926.501, IOGP LSR",
+    "is_critical": true
+  },
+  {
+    "id": "LSR-WAH-02",
+    "category": "Working at Height",
+    "item_text": "Apakah scaffolding telah diinspeksi oleh Scaffolder bersertifikat dan terpasang tag hijau (Safe for Use) sebelum digunakan?",
+    "standard_ref": "OSHA 1926.451, IOGP LSR",
+    "is_critical": true
+  },
+  {
+    "id": "LSR-WAH-03",
+    "category": "Working at Height",
+    "item_text": "Apakah dipasang pagar pengaman (guardrail) standar yang terdiri dari top rail, mid rail, dan toe board di sekeliling area kerja terbuka?",
+    "standard_ref": "OSHA 1926.502, IOGP LSR",
+    "is_critical": false
+  },
+  {
+    "id": "LSR-WAH-04",
+    "category": "Working at Height",
+    "item_text": "Apakah semua peralatan kerja di ketinggian diikat dengan lanyard alat (tool lanyard) untuk mencegah bahaya benda jatuh (falling objects)?",
+    "standard_ref": "OSHA 1926.759, IOGP LSR",
+    "is_critical": false
+  },
+  {
+    "id": "LSR-WAH-05",
+    "category": "Working at Height",
+    "item_text": "Apakah area di bawah pekerjaan ketinggian telah diisolasi (barikade dan tanda peringatan) untuk mencegah personel melintas di bawahnya?",
+    "standard_ref": "OSHA 1926.502, IOGP LSR",
+    "is_critical": true
+  },
+  {
+    "id": "LSR-WAH-06",
+    "category": "Working at Height",
+    "item_text": "Apakah rencana tanggap darurat penyelamatan ketinggian (Rescue Plan) telah tersedia, disosialisasikan, dan peralatan rescue siap pakai di lokasi?",
+    "standard_ref": "OSHA 1926.502, IOGP LSR",
+    "is_critical": true
+  },
+  {
+    "id": "LSR-CSE-01",
+    "category": "Confined Space Entry",
+    "item_text": "Apakah izin kerja masuk ruang terbatas (Confined Space Entry Permit) telah disetujui dan seluruh isolasi fisik (blind/spectacle) telah dipasang?",
+    "standard_ref": "OSHA 1910.146, IOGP LSR",
+    "is_critical": true
+  },
+  {
+    "id": "LSR-CSE-02",
+    "category": "Confined Space Entry",
+    "item_text": "Apakah telah dilakukan pengukuran gas atmosfer berbahaya (Oksigen 19.5%-23.5%, LEL <10%, Gas Beracun <TLV) oleh Authorized Gas Tester (AGT) sesaat sebelum masuk?",
+    "standard_ref": "OSHA 1910.146, IOGP LSR",
+    "is_critical": true
+  },
+  {
+    "id": "LSR-CSE-03",
+    "category": "Confined Space Entry",
+    "item_text": "Apakah petugas jaga ruang terbatas (Confined Space Attendant/Standby Person) bersertifikat telah siaga penuh di luar akses masuk?",
+    "standard_ref": "OSHA 1910.146, IOGP LSR",
+    "is_critical": true
+  },
+  {
+    "id": "LSR-CSE-04",
+    "category": "Confined Space Entry",
+    "item_text": "Apakah sistem ventilasi paksa (mechanical ventilation/blower) dinyalakan terus-menerus selama pekerjaan berlangsung dan udara dipantau periodik?",
+    "standard_ref": "OSHA 1910.146, IOGP LSR",
+    "is_critical": false
+  },
+  {
+    "id": "LSR-CSE-05",
+    "category": "Confined Space Entry",
+    "item_text": "Apakah peralatan penyelamatan darurat (tripod rescue, harness, breathing apparatus) telah disiapkan di dekat pintu masuk?",
+    "standard_ref": "OSHA 1910.146, IOGP LSR",
+    "is_critical": true
+  },
+  {
+    "id": "LSR-CSE-06",
+    "category": "Confined Space Entry",
+    "item_text": "Apakah sistem komunikasi dua arah antara pekerja di dalam dan attendant di luar telah diuji dan berfungsi dengan baik?",
+    "standard_ref": "OSHA 1910.146, IOGP LSR",
+    "is_critical": false
+  },
+  {
+    "id": "LSR-LTO-01",
+    "category": "Energy Isolation / LOTO",
+    "item_text": "Apakah isolasi energi berbahaya telah dikonfirmasi menggunakan metode LOTO (Lockout, Tagout) pada titik isolasi utama sebelum pekerjaan dimulai?",
+    "standard_ref": "OSHA 1910.147, IOGP LSR",
+    "is_critical": true
+  },
+  {
+    "id": "LSR-LTO-02",
+    "category": "Energy Isolation / LOTO",
+    "item_text": "Apakah uji ketiadaan energi (Zero Energy State Test / Try Out) telah dilakukan untuk memastikan tidak ada sisa energi (residual energy) yang terperangkap?",
+    "standard_ref": "OSHA 1910.147, IOGP LSR",
+    "is_critical": true
+  },
+  {
+    "id": "LSR-LTO-03",
+    "category": "Energy Isolation / LOTO",
+    "item_text": "Apakah setiap pekerja yang terlibat telah memasang gembok pengaman pribadi (Personal Lock) mereka masing-masing pada hasp isolasi?",
+    "standard_ref": "OSHA 1910.147, IOGP LSR",
+    "is_critical": true
+  },
+  {
+    "id": "LSR-LTO-04",
+    "category": "Energy Isolation / LOTO",
+    "item_text": "Apakah dokumen daftar isolasi (LOTO Register/Isolation List) telah diverifikasi dan ditandatangani oleh Isolator dan Pengawas Pekerjaan?",
+    "standard_ref": "OSHA 1910.147, IOGP LSR",
+    "is_critical": false
+  },
+  {
+    "id": "LSR-LTO-05",
+    "category": "Energy Isolation / LOTO",
+    "item_text": "Apakah sistem pelepasan tekanan (depressurization/drainage) telah dilakukan secara aman sebelum membuka katup atau flange?",
+    "standard_ref": "OSHA 1910.147, IOGP LSR",
+    "is_critical": true
+  },
+  {
+    "id": "LSR-LTO-06",
+    "category": "Energy Isolation / LOTO",
+    "item_text": "Apakah batas zona aman isolasi telah diidentifikasi dan ditandai secara fisik di lapangan agar tidak ada intervensi dari luar?",
+    "standard_ref": "OSHA 1910.147, IOGP LSR",
+    "is_critical": false
+  },
+  {
+    "id": "LSR-SML-01",
+    "category": "Safe Mechanical Lifting",
+    "item_text": "Apakah rencana pengangkatan (Lifting Plan) yang sesuai kelas beban (rutin/non-rutin/kritis) telah disusun, disetujui, dan disosialisasikan?",
+    "standard_ref": "OSHA 1926.1400, ASME B30.5",
+    "is_critical": true
+  },
+  {
+    "id": "LSR-SML-02",
+    "category": "Safe Mechanical Lifting",
+    "item_text": "Apakah Operator Crane, Rigger, dan Signalman memiliki sertifikat kompetensi (SIO) resmi yang masih berlaku?",
+    "standard_ref": "OSHA 1926.1427, IOGP LSR",
+    "is_critical": true
+  },
+  {
+    "id": "LSR-SML-03",
+    "category": "Safe Mechanical Lifting",
+    "item_text": "Apakah semua alat bantu angkat (lifting gears seperti shackle, sling, webbing) telah diinspeksi secara visual dan memiliki sertifikat kelayakan uji riksa?",
+    "standard_ref": "OSHA 1926.251, ASME B30.9",
+    "is_critical": true
+  },
+  {
+    "id": "LSR-SML-04",
+    "category": "Safe Mechanical Lifting",
+    "item_text": "Apakah perangkat pengaman crane (seperti Load Moment Indicator - LMI, anti-two block) berfungsi dengan baik dan tidak di-bypass?",
+    "standard_ref": "OSHA 1926.1412, IOGP LSR",
+    "is_critical": true
+  },
+  {
+    "id": "LSR-SML-05",
+    "category": "Safe Mechanical Lifting",
+    "item_text": "Apakah barikade radius putar crane (swing radius) telah dipasang penuh dan dipastikan tidak ada orang berada di bawah beban gantung (suspended load)?",
+    "standard_ref": "OSHA 1926.1424, IOGP LSR",
+    "is_critical": true
+  },
+  {
+    "id": "LSR-SML-06",
+    "category": "Safe Mechanical Lifting",
+    "item_text": "Apakah kondisi tanah tempat penempatan outrigger crane telah diperiksa, stabil, dan menggunakan outrigger pad/timber yang memadai?",
+    "standard_ref": "OSHA 1926.1402, ASME B30.5",
+    "is_critical": false
+  },
+  {
+    "id": "LSR-EXC-01",
+    "category": "Excavation & Trenching",
+    "item_text": "Apakah galian dengan kedalaman >1.2 meter telah dipasang sistem proteksi dinding galian (shoring, shielding, atau sloping) untuk mencegah longsor?",
+    "standard_ref": "OSHA 1926.652, IOGP LSR",
+    "is_critical": true
+  },
+  {
+    "id": "LSR-EXC-02",
+    "category": "Excavation & Trenching",
+    "item_text": "Apakah deteksi utilitas bawah tanah (underground utility detection) seperti kabel listrik/pipa gas telah dilakukan sebelum penggalian dimulai?",
+    "standard_ref": "OSHA 1926.651, IOGP LSR",
+    "is_critical": true
+  },
+  {
+    "id": "LSR-EXC-03",
+    "category": "Excavation & Trenching",
+    "item_text": "Apakah akses masuk/keluar yang aman (seperti tangga) tersedia dalam jarak maksimal 7.5 meter dari pekerja di dalam galian?",
+    "standard_ref": "OSHA 1926.651, IOGP LSR",
+    "is_critical": false
+  },
+  {
+    "id": "LSR-EXC-04",
+    "category": "Excavation & Trenching",
+    "item_text": "Apakah material hasil galian (spoil pile) dan alat berat ditempatkan minimal 0.6 meter dari bibir galian untuk menghindari beban runtuh?",
+    "standard_ref": "OSHA 1926.651, IOGP LSR",
+    "is_critical": false
+  },
+  {
+    "id": "LSR-EXC-05",
+    "category": "Excavation & Trenching",
+    "item_text": "Apakah atmosfer di dalam galian dalam (>1.2m) diuji secara berkala untuk memastikan tidak ada akumulasi gas berbahaya atau kekurangan oksigen?",
+    "standard_ref": "OSHA 1926.651, IOGP LSR",
+    "is_critical": true
+  },
+  {
+    "id": "LSR-EXC-06",
+    "category": "Excavation & Trenching",
+    "item_text": "Apakah barikade fisik yang kokoh dan lampu penerangan/reflektor telah dipasang di sekeliling area galian untuk mencegah orang atau kendaraan terperosok?",
+    "standard_ref": "OSHA 1926.651, IOGP LSR",
+    "is_critical": true
+  },
+  {
+    "id": "LSR-HOT-01",
+    "category": "Hot Work",
+    "item_text": "Apakah izin kerja panas (Hot Work Permit) telah disetujui dan area kerja bebas dari material mudah terbakar dalam radius minimal 11 meter (35 kaki)?",
+    "standard_ref": "OSHA 1910.252, NFPA 51B",
+    "is_critical": true
+  },
+  {
+    "id": "LSR-HOT-02",
+    "category": "Hot Work",
+    "item_text": "Apakah Fire Watcher (Petugas Jaga Api) yang terlatih bersiap di lokasi kerja dengan APAR (Alat Pemadam Api Ringan) siap pakai?",
+    "standard_ref": "OSHA 1910.252, NFPA 51B",
+    "is_critical": true
+  },
+  {
+    "id": "LSR-HOT-03",
+    "category": "Hot Work",
+    "item_text": "Apakah tabung gas oksigen dan asetilen dilengkapi dengan Flashback Arrestor pada kedua ujung regulator dan obor las?",
+    "standard_ref": "OSHA 1910.253, IOGP LSR",
+    "is_critical": true
+  },
+  {
+    "id": "LSR-HOT-04",
+    "category": "Hot Work",
+    "item_text": "Apakah peralatan listrik atau mesin las telah di-grounding dengan benar dan kabel-kabelnya bebas dari sambungan longgar atau terkelupas?",
+    "standard_ref": "OSHA 1910.303, IOGP LSR",
+    "is_critical": false
+  },
+  {
+    "id": "LSR-HOT-05",
+    "category": "Hot Work",
+    "item_text": "Apakah dilakukan pengujian gas atmosfer (combustible gas monitoring) berkala sebelum dan selama pengelasan/pemotongan di area berisiko tinggi?",
+    "standard_ref": "OSHA 1910.252, IOGP LSR",
+    "is_critical": true
+  },
+  {
+    "id": "LSR-HOT-06",
+    "category": "Hot Work",
+    "item_text": "Apakah tirai las tahan api (fire blanket) dipasang rapat di sekeliling area pekerjaan untuk menahan percikan bunga api (sparks)?",
+    "standard_ref": "OSHA 1910.252, NFPA 51B",
+    "is_critical": false
+  },
+  {
+    "id": "LSR-BYP-01",
+    "category": "Line Breaking / Bypass Safety Controls",
+    "item_text": "Apakah pembukaan jalur pipa (Line Breaking) yang berisi zat berbahaya telah diisolasi penuh, didepresurisasi, dibilas (flushed), dan diuji kadar residunya?",
+    "standard_ref": "OSHA 1910.119, IOGP LSR",
+    "is_critical": true
+  },
+  {
+    "id": "LSR-BYP-02",
+    "category": "Line Breaking / Bypass Safety Controls",
+    "item_text": "Apakah tindakan membypass sistem pengaman (safety controls bypass/defeat) seperti interlock, ESD, atau alarm keselamatan telah disetujui secara formal melalui otorisasi khusus?",
+    "standard_ref": "OSHA 1910.119, IOGP LSR",
+    "is_critical": true
+  },
+  {
+    "id": "LSR-BYP-03",
+    "category": "Line Breaking / Bypass Safety Controls",
+    "item_text": "Apakah pekerja menggunakan APD spesifik bahan kimia (chemical suit, respiratory protection/face shield) yang tepat saat melakukan line breaking?",
+    "standard_ref": "OSHA 1910.132, IOGP LSR",
+    "is_critical": true
+  },
+  {
+    "id": "LSR-BYP-04",
+    "category": "Line Breaking / Bypass Safety Controls",
+    "item_text": "Apakah mitigasi risiko alternatif (alternative mitigation) telah dipasang dan dipantau aktif selama sistem pengaman kritis dinonaktifkan?",
+    "standard_ref": "OSHA 1910.119, IOGP LSR",
+    "is_critical": true
+  },
+  {
+    "id": "LSR-BYP-05",
+    "category": "Line Breaking / Bypass Safety Controls",
+    "item_text": "Apakah penandaan fisik (labeling/lock) pada katup yang dibuka/ditutup telah dipasang untuk mencegah pengoperasian yang tidak disengaja?",
+    "standard_ref": "OSHA 1910.147, IOGP LSR",
+    "is_critical": false
+  },
+  {
+    "id": "LSR-BYP-06",
+    "category": "Line Breaking / Bypass Safety Controls",
+    "item_text": "Apakah sistem pengaman yang dinonaktifkan terdaftar dalam log bypass (Bypass Register) dan dilakukan uji fungsionalitas sebelum dioperasikan kembali?",
+    "standard_ref": "OSHA 1910.119, IOGP LSR",
+    "is_critical": false
+  }
+]
