@@ -57,8 +57,13 @@ Untuk mempermudah pemahaman arsitektur, kepatuhan, dan panduan kontribusi bagi p
 ## ⚡ Panduan Instalasi & Menjalankan Proyek
 
 ### 1. Clone & Konfigurasi Firebase Lokal
-1. Buka Android Studio, pilih **Open** dan arahkan ke direktori root repository ini.
-2. Letakkan file **`google-services.json`** proyek Firebase Anda ke folder `app/google-services.json` (file ini sengaja dikecualikan di `.gitignore` demi keamanan credential; project tetap dapat di-build tanpa file tersebut berkat `googleServices.missing.passthrough=true`).
+1. Clone repository resmi proyek dari GitHub (`origin`, branch `main`):
+   ```bash
+   git clone https://github.com/hasan2811/LSR.git
+   ```
+   *(Pastikan `git remote -v` selalu mengarah ke `https://github.com/hasan2811/LSR.git` saat melakukan `git push origin main`.)*
+2. Buka Android Studio, pilih **Open** dan arahkan ke direktori root repository ini.
+3. Letakkan file **`google-services.json`** proyek Firebase Anda ke folder `app/google-services.json` (file ini sengaja dikecualikan di `.gitignore` demi keamanan credential; project tetap dapat di-build tanpa file tersebut berkat `googleServices.missing.passthrough=true`).
 
 ### 2. Konfigurasi Keystore Debug
 Aplikasi menggunakan keystore debug lokal. Jika file `debug.keystore` belum tersedia di direktori root, buat menggunakan JDK keytool:

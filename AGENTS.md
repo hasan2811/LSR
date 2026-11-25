@@ -67,6 +67,7 @@ Before writing code or answering structural questions, consult in this order:
 ## 5. UI/UX & Production Baseline Rules (v2.0+)
 
 - **Package & Cloud**: `applicationId` is `com.lowerzakum.lsr`, connected to Firebase project `lowerzakum-482af` with zero hardcoded dummy users, zero hardcoded API keys (`MainActivity.kt`), and strict `.gitignore` credential hygiene.
+- **Canonical GitHub Repository**: Remote `origin` is always `https://github.com/hasan2811/LSR.git` (default branch `main`). Always verify `git remote -v` points to `https://github.com/hasan2811/LSR.git` and push to `origin main` after confirming zero tracked secrets.
 - **Navigation Structure**: 4 primary bottom tabs (`DASHBOARD`, `FEED`, `FINDINGS`, `SETTINGS`) defined in `AppNavTab` (`LsrViewModel.kt`). Cloud Sync, Language, Theme (`AppThemeMode`), Modules, Notifications, Support, and About live inside `SettingsScreen` (`SettingsSection`), NOT in the Dashboard header or bottom bar.
 - **Localization Parity**: Never display raw underscore keys. Every `AppStrings.get(key, language)` call must exist in both `idStrings` and `enStrings` in `AppLanguage.kt`.
 - **Ergonomic Field Controls & Inputs**: Survey answer buttons (`YA` / `TIDAK` / `N/A`) must remain single-line (`maxLines = 1, softWrap = false`), minimum `56.dp` height, empty states must center-align both title and description, and compact search inputs must use `SleekSearchFilterBar` (`BasicTextField`) rather than height-constrained M3 `OutlinedTextField`.

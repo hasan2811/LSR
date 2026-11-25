@@ -9,6 +9,7 @@ Dokumen ini adalah **ringkasan konteks hidup (*living snapshot*)** agar setiap s
 | Komponen | Status Terkini |
 | :--- | :--- |
 | **App ID & Firebase Project** | `com.lowerzakum.lsr` -> Firebase Project `lowerzakum-482af` |
+| **GitHub Repository (`origin`)** | `https://github.com/hasan2811/LSR.git` (branch utama: `main` — selalu push ke remote ini) |
 | **Database Lokal** | Room `2.7.0` (`AppDatabase` **v6**, migrasi non-destruktif `MIGRATION_3_4`, `MIGRATION_4_5`, `MIGRATION_5_6`) |
 | **UI & Theme** | Jetpack Compose M3 + `AppThemeMode` (`SYSTEM`, `LIGHT`, `DARK` obsidian kontras tinggi) |
 | **Navigasi Utama** | 4 tab (`DASHBOARD`, `FEED`, `FINDINGS`, `SETTINGS`) di `LsrInspectionApp.kt` |
