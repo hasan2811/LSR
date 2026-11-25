@@ -1,18 +1,59 @@
-*.iml
-.gradle
-.kotlin
+# ==========================================
+# Credentials, Secrets & Firebase Config
+# ==========================================
+.env
+.env.*
+!.env.example
+google-services.json
+**/google-services.json
+GoogleService-Info.plist
+*-firebase-adminsdk-*.json
+*service-account*.json
+.firebase/
+firebase-debug.log*
+firestore-debug.log*
+
+# Keystores & Release Signing
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.pem
+*.key
+keystore.properties
+signing.properties
+
+# ==========================================
+# Local Machine, Build & Gradle
+# ==========================================
+local.properties
 /local.properties
-/.idea/caches
-/.idea/libraries
+*.iml
+.gradle/
+.kotlin/
+**/build/
+/captures/
+.externalNativeBuild/
+.cxx/
+
+# ==========================================
+# Android Studio / IntelliJ Local Files
+# ==========================================
+/.idea/caches/
+/.idea/libraries/
 /.idea/modules.xml
 /.idea/workspace.xml
 /.idea/navEditor.xml
 /.idea/assetWizardSettings.xml
+/.idea/deviceManager.xml
+/.idea/deploymentTargetSelector.xml
+/.idea/appInsightsSettings.xml
+/.idea/shelf/
+
+# ==========================================
+# OS & Temp Files
+# ==========================================
 .DS_Store
-/build
-/captures
-.externalNativeBuild
-.cxx
-local.properties
-.env
-debug.keystore
+Thumbs.db
+*.swp
+*.swo

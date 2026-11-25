@@ -1,6 +1,10 @@
 package com.example.ui.screens
 
 import android.content.Intent
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -22,6 +26,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -30,9 +35,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.core.content.FileProvider
+import coil.compose.AsyncImage
 import com.example.data.*
 import com.example.ui.theme.*
 import kotlinx.coroutines.flow.Flow
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -48,11 +56,29 @@ fun FindingDetailScreen(
     onSubmitAction: (correctiveAction: String, evidenceNotes: String) -> Unit,
     onVerifyAndClose: (rating: Int, comment: String) -> Unit,
     onReopen: (reason: String) -> Unit,
+    onAttachEvidencePhoto: (Uri) -> Unit = {},
+    onSendMessage: (String) -> Unit = {},
+    onSendReminder: () -> Unit = {},
     onDeleteFinding: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val actionLogs by actionLogsFlow.collectAsState(initial = emptyList())
+
+    var pendingCameraUri by remember { mutableStateOf<Uri?>(null) }
+    val galleryLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        if (uri != null) onAttachEvidencePhoto(uri)
+    }
+    val cameraLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicture()
+    ) { success ->
+        val uri = pendingCameraUri
+        if (success && uri != null) {
+            onAttachEvidencePhoto(uri)
+        }
+    }
 
     val dateFormat = remember { SimpleDateFormat("dd MMM yyyy, HH:mm", Locale.getDefault()) }
     val formattedDate = remember(finding.timestamp) { dateFormat.format(Date(finding.timestamp)) }
@@ -237,6 +263,19 @@ fun FindingDetailScreen(
                                 fontSize = 11.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
+                            if (!finding.status.equals("CLOSED", ignoreCase = true)) {
+                                val slaLabel = if (finding.isOverdue()) {
+                                    "⚠️ ${AppStrings.get("sla_overdue", language)}"
+                                } else {
+                                    "⏱️ ${AppStrings.get("sla_remaining", language)}: ${finding.slaRemainingHours().coerceAtLeast(0L)}h"
+                                }
+                                Text(
+                                    text = slaLabel,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (finding.isOverdue()) DangerRed else AmberGold
+                                )
+                            }
                         }
                     }
 
@@ -519,6 +558,99 @@ fun FindingDetailScreen(
                         maxLines = 4
                     )
 
+                    // Compressed Field Evidence Photo Attachment
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Icon(Icons.Default.PhotoCamera, contentDescription = null, tint = SafetyBlue, modifier = Modifier.size(16.dp))
+                                    Text(
+                                        text = AppStrings.get("photo_evidence_title", language),
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                                if (finding.evidencePhotoUrl.isNotBlank() || finding.evidencePhotoUri.isNotBlank()) {
+                                    Surface(
+                                        shape = RoundedCornerShape(6.dp),
+                                        color = if (finding.evidencePhotoUrl.isNotBlank()) SafetyTeal.copy(alpha = 0.15f) else AmberGold.copy(alpha = 0.15f)
+                                    ) {
+                                        Text(
+                                            text = if (finding.evidencePhotoUrl.isNotBlank()) "Cloud Storage" else "Lokal (Antre)",
+                                            fontSize = 9.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (finding.evidencePhotoUrl.isNotBlank()) SafetyTeal else AmberGold,
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                }
+                            }
+
+                            val photoSource = finding.evidencePhotoUrl.ifBlank { finding.evidencePhotoUri }
+                            if (photoSource.isNotBlank()) {
+                                val modelData: Any = if (photoSource.startsWith("http")) photoSource else File(photoSource)
+                                AsyncImage(
+                                    model = modelData,
+                                    contentDescription = "Evidence Photo",
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(160.dp)
+                                        .clip(RoundedCornerShape(10.dp))
+                                )
+                            }
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                OutlinedButton(
+                                    onClick = {
+                                        galleryLauncher.launch(
+                                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                        )
+                                    },
+                                    shape = RoundedCornerShape(10.dp),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Icon(Icons.Default.PhotoLibrary, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(AppStrings.get("photo_pick_gallery", language), fontSize = 11.sp, maxLines = 1)
+                                }
+                                FilledTonalButton(
+                                    onClick = {
+                                        val dir = File(context.cacheDir, "camera_temp").apply { mkdirs() }
+                                        val tmp = File(dir, "capture_${finding.id}_${System.currentTimeMillis()}.jpg")
+                                        val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", tmp)
+                                        pendingCameraUri = uri
+                                        cameraLauncher.launch(uri)
+                                    },
+                                    shape = RoundedCornerShape(10.dp),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Icon(Icons.Default.CameraAlt, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(AppStrings.get("photo_take_camera", language), fontSize = 11.sp, maxLines = 1)
+                                }
+                            }
+                        }
+                    }
+
                     Button(
                         onClick = {
                             onSubmitAction(correctiveActionInput, evidenceNotesInput)
@@ -726,6 +858,107 @@ fun FindingDetailScreen(
                 }
             }
 
+            // 4.5 Direct Inter-User Communication & Reminder Ping
+            var directMessageInput by remember { mutableStateOf("") }
+            Card(
+                shape = RoundedCornerShape(18.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                elevation = CardDefaults.cardElevation(2.dp),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(18.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = DarkNavySurface,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp, vertical = 12.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = AppStrings.get("direct_comm_title", language),
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 13.sp,
+                                    color = Color.White
+                                )
+                                Text(
+                                    text = AppStrings.get("direct_comm_desc", language),
+                                    fontSize = 11.sp,
+                                    color = Color(0xFF94A3B8)
+                                )
+                            }
+                            if (!finding.status.equals("CLOSED", ignoreCase = true)) {
+                                FilledTonalButton(
+                                    onClick = onSendReminder,
+                                    colors = ButtonDefaults.filledTonalButtonColors(
+                                        containerColor = AmberGold,
+                                        contentColor = Color.Black
+                                    ),
+                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                                    shape = RoundedCornerShape(10.dp)
+                                ) {
+                                    Icon(Icons.Default.NotificationsActive, contentDescription = null, modifier = Modifier.size(15.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = AppStrings.get("send_reminder_btn", language),
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        maxLines = 1
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = directMessageInput,
+                            onValueChange = { directMessageInput = it },
+                            placeholder = {
+                                Text(
+                                    text = AppStrings.get("chat_placeholder", language),
+                                    fontSize = 12.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(14.dp),
+                            maxLines = 3
+                        )
+                        FilledIconButton(
+                            onClick = {
+                                if (directMessageInput.isNotBlank()) {
+                                    onSendMessage(directMessageInput.trim())
+                                    directMessageInput = ""
+                                }
+                            },
+                            enabled = directMessageInput.isNotBlank(),
+                            colors = IconButtonDefaults.filledIconButtonColors(
+                                containerColor = SafetyBlue,
+                                contentColor = Color.White
+                            ),
+                            modifier = Modifier.size(48.dp)
+                        ) {
+                            Icon(Icons.Default.Send, contentDescription = "Send", modifier = Modifier.size(18.dp))
+                        }
+                    }
+                }
+            }
+
             // 5. Audit Trail & Action History Logs (Chronological Timeline)
             Card(
                 shape = RoundedCornerShape(18.dp),
@@ -841,6 +1074,8 @@ fun ActionLogTimelineItem(
         "ACTION_SUBMITTED" -> Triple(AmberGold, Icons.Default.Build, "Tindakan Diajukan")
         "VERIFIED_AND_CLOSED" -> Triple(SafetyTeal, Icons.Default.CheckCircle, "Diverifikasi & Ditutup")
         "REOPENED_BY_INSPECTOR", "REOPENED" -> Triple(CriticalOrange, Icons.Default.Replay, "Dibuka Kembali")
+        "REMINDER_PING" -> Triple(AmberGold, Icons.Default.NotificationsActive, "Pengingat Push")
+        "COMMENT" -> Triple(SafetyBlue, Icons.Default.ChatBubbleOutline, "Pesan Langsung")
         else -> Triple(MaterialTheme.colorScheme.primary, Icons.Default.Info, log.actionType)
     }
 

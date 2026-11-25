@@ -14,7 +14,7 @@ android {
   compileSdk { version = release(36) { minorApiLevel = 1 } }
 
   defaultConfig {
-    applicationId = "com.aistudio.hselsrinspection.kxmpzq"
+    applicationId = "com.lowerzakum.lsr"
     minSdk = 24
     targetSdk = 36
     versionCode = 1
@@ -93,14 +93,17 @@ dependencies {
   // implementation(libs.androidx.navigation.compose)
   implementation(libs.androidx.room.ktx)
   implementation(libs.androidx.room.runtime)
-  // implementation(libs.coil.compose)
+  implementation(libs.androidx.work.runtime.ktx)
+  implementation(libs.coil.compose)
   implementation(libs.converter.moshi)
   implementation(libs.firebase.ai)
   // Firebase Firestore
   implementation(libs.firebase.firestore)
 
-  // Firebase Auth
+  // Firebase Auth, Storage & Messaging
   implementation(libs.firebase.auth)
+  implementation(libs.firebase.storage)
+  implementation(libs.firebase.messaging)
   // implementation(libs.androidx.credentials)
   // implementation(libs.androidx.credentials.play.services)
   // implementation(libs.googleid)

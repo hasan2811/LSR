@@ -16,6 +16,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -24,10 +25,15 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.net.Uri
 import com.example.data.*
+import com.example.ui.components.ActiveFilterSummaryStrip
+import com.example.ui.components.ActivityFilterBottomSheet
+import com.example.ui.components.SleekSearchFilterBar
 import com.example.ui.theme.*
 import kotlinx.coroutines.flow.Flow
 import java.text.SimpleDateFormat
@@ -39,6 +45,16 @@ fun FindingsScreen(
     language: AppLanguage,
     findings: List<FindingItem>,
     teamRoster: List<TeamRosterMember>,
+    isRefreshing: Boolean = false,
+    filterCriteria: ActivityFilterCriteria = ActivityFilterCriteria(),
+    onFilterCriteriaChange: (ActivityFilterCriteria) -> Unit = {},
+    availableCompanies: List<String> = emptyList(),
+    availableLocations: List<String> = emptyList(),
+    onRefresh: () -> Unit = {},
+    onExportCsv: () -> Unit = {},
+    onAttachEvidencePhoto: (findingId: Int, sourceUri: Uri) -> Unit = { _, _ -> },
+    onSendFindingMessage: (findingId: Int, message: String) -> Unit = { _, _ -> },
+    onSendReminderPing: (findingId: Int) -> Unit = {},
     onGetActionLogs: (findingId: Int) -> Flow<List<ActionHistoryLog>>,
     onAssignPic: (findingId: Int, name: String, email: String, role: String) -> Unit,
     onSubmitPicAction: (findingId: Int, action: String, evidence: String) -> Unit,
@@ -48,9 +64,10 @@ fun FindingsScreen(
     onDeleteFinding: (id: Int) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    var selectedFilter by remember { mutableStateOf("ALL") } // "ALL", "OPEN", "IN_REVIEW", "CLOSED", "REOPENED"
+    var selectedFilter by remember { mutableStateOf("ALL") } // "ALL", "OPEN", "IN_REVIEW", "CLOSED", "REOPENED", "OVERDUE"
     var selectedFindingForDetail by remember { mutableStateOf<FindingItem?>(null) }
     var searchQuery by remember { mutableStateOf("") }
+    var showFilterSheet by remember { mutableStateOf(false) }
 
     // If detail is active, find updated finding from list
     val currentActiveFinding = remember(selectedFindingForDetail, findings) {
@@ -77,6 +94,15 @@ fun FindingsScreen(
             onReopen = { reason ->
                 onReopenFinding(currentActiveFinding.id, reason)
             },
+            onAttachEvidencePhoto = { uri ->
+                onAttachEvidencePhoto(currentActiveFinding.id, uri)
+            },
+            onSendMessage = { msg ->
+                onSendFindingMessage(currentActiveFinding.id, msg)
+            },
+            onSendReminder = {
+                onSendReminderPing(currentActiveFinding.id)
+            },
             onDeleteFinding = {
                 onDeleteFinding(currentActiveFinding.id)
                 selectedFindingForDetail = null
@@ -85,7 +111,7 @@ fun FindingsScreen(
         return
     }
 
-    val filteredFindings = remember(findings, selectedFilter, searchQuery) {
+    val filteredFindings = remember(findings, selectedFilter, searchQuery, filterCriteria) {
         findings.filter { finding ->
             val statusNorm = finding.status.uppercase()
             val matchesFilter = when (selectedFilter) {
@@ -93,6 +119,7 @@ fun FindingsScreen(
                 "IN_REVIEW" -> statusNorm == "ACTION_SUBMITTED" || statusNorm == "IN_REVIEW" || statusNorm == "IN_PROGRESS"
                 "CLOSED" -> statusNorm == "CLOSED"
                 "REOPENED" -> statusNorm == "REOPENED"
+                "OVERDUE" -> finding.isOverdue()
                 else -> true
             }
             val matchesSearch = if (searchQuery.isBlank()) true else {
@@ -100,11 +127,38 @@ fun FindingsScreen(
                         finding.category.contains(searchQuery, ignoreCase = true) ||
                         finding.ruleId.contains(searchQuery, ignoreCase = true) ||
                         finding.area.contains(searchQuery, ignoreCase = true) ||
+                        finding.company.contains(searchQuery, ignoreCase = true) ||
                         finding.inspectorName.contains(searchQuery, ignoreCase = true) ||
                         finding.assignedPicName.contains(searchQuery, ignoreCase = true)
             }
-            matchesFilter && matchesSearch
+            val matchesCriteria = filterCriteria.matches(
+                timestamp = finding.timestamp,
+                users = listOf(finding.inspectorName, finding.assignedPicName),
+                lsrTypes = "${finding.category} ${finding.ruleId}",
+                itemCompany = finding.company,
+                itemLocation = finding.area
+            )
+            matchesFilter && matchesSearch && matchesCriteria
         }
+    }
+
+    val resolvedUsers = remember(teamRoster, findings) {
+        (teamRoster.map { it.name } + findings.flatMap { listOf(it.inspectorName, it.assignedPicName) })
+            .map { it.trim() }
+            .filter { it.isNotBlank() && it != "Unassigned / HSE Field Team" }
+            .distinct()
+            .sorted()
+    }
+    val resolvedLsrTypes = remember(findings) {
+        findings.map { it.category }.map { it.trim() }.filter { it.isNotBlank() }.distinct().sorted()
+    }
+    val resolvedCompanies = remember(availableCompanies, findings, teamRoster) {
+        (availableCompanies + findings.map { it.company } + teamRoster.map { it.department })
+            .map { it.trim() }.filter { it.isNotBlank() }.distinct().sorted()
+    }
+    val resolvedLocations = remember(availableLocations, findings) {
+        (availableLocations + findings.map { it.area })
+            .map { it.trim() }.filter { it.isNotBlank() }.distinct().sorted()
     }
 
     val openCount = remember(findings) { findings.count { it.status.equals("OPEN", ignoreCase = true) } }
@@ -116,7 +170,7 @@ fun FindingsScreen(
     }
     val closedCount = remember(findings) { findings.count { it.status.equals("CLOSED", ignoreCase = true) } }
     val reopenedCount = remember(findings) { findings.count { it.status.equals("REOPENED", ignoreCase = true) } }
-    val criticalCount = remember(findings) { findings.count { it.isCritical && !it.status.equals("CLOSED", ignoreCase = true) } }
+    val overdueCount = remember(findings) { findings.count { it.isOverdue() } }
 
     val context = LocalContext.current
 
@@ -146,38 +200,47 @@ fun FindingsScreen(
             }
 
             if (findings.isNotEmpty()) {
-                FilledTonalIconButton(
-                    onClick = {
-                        val openItems = findings.filter { !it.status.equals("CLOSED", ignoreCase = true) }
-                        val sb = StringBuilder()
-                        sb.append("⚠️ *HSE NON-COMPLIANCE & FINDINGS ACTION REGISTER*\n")
-                        sb.append("Total Temuan Aktif: ${openItems.size} item\n\n")
-                        openItems.forEachIndexed { idx, f ->
-                            sb.append("${idx + 1}. [${f.status.uppercase()}] ${f.ruleId} - ${f.category}\n")
-                            sb.append("   Area: ${f.area} | Inspektur: ${f.inspectorName}\n")
-                            sb.append("   PIC: ${f.assignedPicName} (${f.assignedPicRole})\n")
-                            sb.append("   Isu: ${f.itemText}\n")
-                            if (f.correctiveAction.isNotBlank()) {
-                                sb.append("   Tindakan Koreksi: ${f.correctiveAction}\n")
-                            }
-                            if (f.satisfactionRating > 0) {
-                                sb.append("   Rating: ${f.satisfactionRating}/5 ⭐\n")
-                            }
-                            sb.append("\n")
-                        }
-                        val sendIntent = Intent().apply {
-                            action = Intent.ACTION_SEND
-                            putExtra(Intent.EXTRA_TEXT, sb.toString())
-                            type = "text/plain"
-                        }
-                        context.startActivity(Intent.createChooser(sendIntent, "Bagikan Register Temuan HSE"))
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    FilledTonalIconButton(onClick = onExportCsv) {
+                        Icon(
+                            imageVector = Icons.Default.TableView,
+                            contentDescription = AppStrings.get("export_csv_btn", language),
+                            tint = SafetyTeal
+                        )
                     }
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Share,
-                        contentDescription = "Share Findings",
-                        tint = MaterialTheme.colorScheme.primary
-                    )
+                    FilledTonalIconButton(
+                        onClick = {
+                            val openItems = findings.filter { !it.status.equals("CLOSED", ignoreCase = true) }
+                            val sb = StringBuilder()
+                            sb.append("⚠️ *HSE NON-COMPLIANCE & FINDINGS ACTION REGISTER*\n")
+                            sb.append("Total Temuan Aktif: ${openItems.size} item\n\n")
+                            openItems.forEachIndexed { idx, f ->
+                                sb.append("${idx + 1}. [${f.status.uppercase()}] ${f.ruleId} - ${f.category}\n")
+                                sb.append("   Area: ${f.area} | Inspektur: ${f.inspectorName}\n")
+                                sb.append("   PIC: ${f.assignedPicName} (${f.assignedPicRole})\n")
+                                sb.append("   Isu: ${f.itemText}\n")
+                                if (f.correctiveAction.isNotBlank()) {
+                                    sb.append("   Tindakan Koreksi: ${f.correctiveAction}\n")
+                                }
+                                if (f.satisfactionRating > 0) {
+                                    sb.append("   Rating: ${f.satisfactionRating}/5 ⭐\n")
+                                }
+                                sb.append("\n")
+                            }
+                            val sendIntent = Intent().apply {
+                                action = Intent.ACTION_SEND
+                                putExtra(Intent.EXTRA_TEXT, sb.toString())
+                                type = "text/plain"
+                            }
+                            context.startActivity(Intent.createChooser(sendIntent, "Bagikan Register Temuan HSE"))
+                        }
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Share,
+                            contentDescription = "Share Findings",
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
                 }
             }
         }
@@ -190,25 +253,25 @@ fun FindingsScreen(
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             FindingKpiBadge(
-                label = AppStrings.get("filter_open", language),
+                label = if (language == AppLanguage.ID) "Terbuka" else "Open",
                 count = openCount,
                 color = DangerRed,
                 modifier = Modifier.weight(1f)
             )
             FindingKpiBadge(
-                label = "In Review",
+                label = if (language == AppLanguage.ID) "Ditinjau" else "In Review",
                 count = inReviewCount,
                 color = AmberGold,
                 modifier = Modifier.weight(1f)
             )
             FindingKpiBadge(
-                label = AppStrings.get("filter_resolved", language),
+                label = if (language == AppLanguage.ID) "Selesai" else "Closed",
                 count = closedCount,
                 color = SafetyTeal,
                 modifier = Modifier.weight(1f)
             )
             FindingKpiBadge(
-                label = "Reopen",
+                label = if (language == AppLanguage.ID) "Ulang" else "Reopen",
                 count = reopenedCount,
                 color = CriticalOrange,
                 modifier = Modifier.weight(1f)
@@ -217,25 +280,37 @@ fun FindingsScreen(
 
         Spacer(modifier = Modifier.height(12.dp))
 
-        // Search Field
-        OutlinedTextField(
-            value = searchQuery,
-            onValueChange = { searchQuery = it },
-            placeholder = { Text("Cari temuan, PIC, area, atau aturan...", fontSize = 13.sp) },
-            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(18.dp)) },
-            trailingIcon = {
-                if (searchQuery.isNotEmpty()) {
-                    IconButton(onClick = { searchQuery = "" }) {
-                        Icon(Icons.Default.Clear, contentDescription = "Clear", modifier = Modifier.size(16.dp))
-                    }
-                }
-            },
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(50.dp),
-            shape = RoundedCornerShape(12.dp),
-            singleLine = true
+        // Sleek High-Contrast Search + Filter Button
+        SleekSearchFilterBar(
+            query = searchQuery,
+            onQueryChange = { searchQuery = it },
+            placeholder = if (language == AppLanguage.ID) "Cari temuan, PIC, area, atau aturan..." else "Search findings, PIC, area, or rule...",
+            activeFilterCount = filterCriteria.activeCount,
+            onOpenFilterSheet = { showFilterSheet = true }
         )
+
+        if (filterCriteria.activeCount > 0) {
+            Spacer(modifier = Modifier.height(8.dp))
+            ActiveFilterSummaryStrip(
+                language = language,
+                criteria = filterCriteria,
+                onUpdate = onFilterCriteriaChange,
+                onResetAll = { onFilterCriteriaChange(ActivityFilterCriteria()) }
+            )
+        }
+
+        if (showFilterSheet) {
+            ActivityFilterBottomSheet(
+                language = language,
+                currentCriteria = filterCriteria,
+                availableUsers = resolvedUsers,
+                availableLsrTypes = resolvedLsrTypes,
+                availableCompanies = resolvedCompanies,
+                availableLocations = resolvedLocations,
+                onApply = onFilterCriteriaChange,
+                onDismiss = { showFilterSheet = false }
+            )
+        }
 
         Spacer(modifier = Modifier.height(10.dp))
 
@@ -254,96 +329,108 @@ fun FindingsScreen(
             FilterChip(
                 selected = selectedFilter == "OPEN",
                 onClick = { selectedFilter = "OPEN" },
-                label = { Text("Open ($openCount)") },
+                label = { Text(if (language == AppLanguage.ID) "Terbuka ($openCount)" else "Open ($openCount)") },
                 colors = FilterChipDefaults.filterChipColors(selectedContainerColor = DangerRed.copy(alpha = 0.15f))
             )
             FilterChip(
                 selected = selectedFilter == "IN_REVIEW",
                 onClick = { selectedFilter = "IN_REVIEW" },
-                label = { Text("In Review ($inReviewCount)") },
+                label = { Text(if (language == AppLanguage.ID) "Ditinjau ($inReviewCount)" else "In Review ($inReviewCount)") },
                 colors = FilterChipDefaults.filterChipColors(selectedContainerColor = AmberGold.copy(alpha = 0.15f))
             )
             FilterChip(
                 selected = selectedFilter == "CLOSED",
                 onClick = { selectedFilter = "CLOSED" },
-                label = { Text("Closed ($closedCount)") },
+                label = { Text(if (language == AppLanguage.ID) "Selesai ($closedCount)" else "Closed ($closedCount)") },
                 colors = FilterChipDefaults.filterChipColors(selectedContainerColor = SafetyTeal.copy(alpha = 0.15f))
             )
             FilterChip(
                 selected = selectedFilter == "REOPENED",
                 onClick = { selectedFilter = "REOPENED" },
-                label = { Text("Reopened ($reopenedCount)") },
+                label = { Text(if (language == AppLanguage.ID) "Dibuka Ulang ($reopenedCount)" else "Reopened ($reopenedCount)") },
                 colors = FilterChipDefaults.filterChipColors(selectedContainerColor = CriticalOrange.copy(alpha = 0.15f))
+            )
+            FilterChip(
+                selected = selectedFilter == "OVERDUE",
+                onClick = { selectedFilter = "OVERDUE" },
+                label = { Text("${AppStrings.get("sla_overdue", language)} ($overdueCount)") },
+                colors = FilterChipDefaults.filterChipColors(selectedContainerColor = DangerRed.copy(alpha = 0.18f))
             )
         }
 
         Spacer(modifier = Modifier.height(10.dp))
 
-        // Findings List
-        if (filteredFindings.isEmpty()) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f),
-                contentAlignment = Alignment.Center
-            ) {
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth(0.9f)
-                        .padding(24.dp),
-                    shape = RoundedCornerShape(20.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+        // Findings List with Pull-to-Refresh
+        PullToRefreshBox(
+            isRefreshing = isRefreshing,
+            onRefresh = onRefresh,
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+        ) {
+            if (filteredFindings.isEmpty()) {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Column(
+                    Card(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(24.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                            .padding(horizontal = 8.dp),
+                        shape = RoundedCornerShape(22.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
                     ) {
-                        Surface(
-                            shape = CircleShape,
-                            color = SafetyTeal.copy(alpha = 0.15f),
-                            modifier = Modifier.size(56.dp)
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 24.dp, vertical = 28.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    Icons.Default.CheckCircle,
-                                    contentDescription = null,
-                                    tint = SafetyTeal,
-                                    modifier = Modifier.size(32.dp)
-                                )
+                            Surface(
+                                shape = CircleShape,
+                                color = SafetyTeal.copy(alpha = 0.14f),
+                                modifier = Modifier.size(56.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        Icons.Default.CheckCircle,
+                                        contentDescription = null,
+                                        tint = SafetyTeal,
+                                        modifier = Modifier.size(30.dp)
+                                    )
+                                }
                             }
+                            Text(
+                                text = AppStrings.get("no_findings_title", language),
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                textAlign = TextAlign.Center
+                            )
+                            Text(
+                                text = AppStrings.get("no_findings_desc", language),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = TextAlign.Center
+                            )
                         }
-                        Text(
-                            text = AppStrings.get("no_findings_title", language),
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Text(
-                            text = AppStrings.get("no_findings_desc", language),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                        )
                     }
                 }
-            }
-        } else {
-            LazyColumn(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                items(filteredFindings, key = { it.id }) { finding ->
-                    EnterpriseFindingCard(
-                        language = language,
-                        finding = finding,
-                        onClick = { selectedFindingForDetail = finding },
-                        onDeleteClicked = { onDeleteFinding(finding.id) }
-                    )
+            } else {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    items(filteredFindings, key = { it.id }) { finding ->
+                        EnterpriseFindingCard(
+                            language = language,
+                            finding = finding,
+                            onClick = { selectedFindingForDetail = finding },
+                            onDeleteClicked = { onDeleteFinding(finding.id) }
+                        )
+                    }
                 }
             }
         }
@@ -460,6 +547,36 @@ fun EnterpriseFindingCard(
                                 fontSize = 9.sp,
                                 fontWeight = FontWeight.Black,
                                 color = CriticalOrange,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+
+                    if (finding.isOverdue()) {
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = DangerRed.copy(alpha = 0.16f),
+                            border = BorderStroke(1.dp, DangerRed.copy(alpha = 0.5f))
+                        ) {
+                            Text(
+                                text = AppStrings.get("sla_overdue", language),
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Black,
+                                color = DangerRed,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    } else if (!finding.status.equals("CLOSED", ignoreCase = true)) {
+                        val remHours = finding.slaRemainingHours().coerceAtLeast(0L)
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = AmberGold.copy(alpha = 0.12f)
+                        ) {
+                            Text(
+                                text = "${AppStrings.get("sla_remaining", language)}: ${remHours}j",
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = AmberGold,
                                 modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                             )
                         }
@@ -611,7 +728,12 @@ fun EnterpriseFindingCard(
                         onClick = onClick,
                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
                     ) {
-                        Text("Kelola & Rincian →", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = SafetyBlue)
+                        Text(
+                            text = if (language == AppLanguage.ID) "Kelola & Rincian →" else "Manage & Details →",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = SafetyBlue
+                        )
                     }
                 }
             }

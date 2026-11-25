@@ -69,9 +69,9 @@ fun LoginGateScreen(
     var regEmail by remember { mutableStateOf("") }
     var regPass by remember { mutableStateOf("") }
     var regConfirmPass by remember { mutableStateOf("") }
-    var regCompany by remember { mutableStateOf("PT Pertamina Hulu Energi") }
-    var regRole by remember { mutableStateOf("Lead HSE Inspector") }
-    var regCert by remember { mutableStateOf("NEBOSH / AK3 Umum") }
+    var regCompany by remember { mutableStateOf("") }
+    var regRole by remember { mutableStateOf("") }
+    var regCert by remember { mutableStateOf("") }
 
     var showForgotDialog by remember { mutableStateOf(false) }
     var forgotEmail by remember { mutableStateOf("") }
@@ -245,7 +245,7 @@ fun LoginGateScreen(
                         ) {
                             Icon(Icons.Default.PeopleAlt, contentDescription = null, modifier = Modifier.size(14.dp))
                             Text(
-                                text = "Akun Firestore (${firestoreUsers.size})",
+                                text = if (isId) "Akun Terdaftar (${firestoreUsers.size})" else "Registered (${firestoreUsers.size})",
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 11.sp
                             )
@@ -481,17 +481,46 @@ fun LoginGateScreen(
 
                             if (firestoreUsers.isEmpty()) {
                                 Surface(
-                                    shape = RoundedCornerShape(12.dp),
+                                    shape = RoundedCornerShape(14.dp),
                                     color = Color.White.copy(alpha = 0.05f),
+                                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.12f)),
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
-                                    Text(
-                                        text = if (isId) "Sedang mengambil data user dari Firestore..." else "Loading users from Firestore...",
-                                        modifier = Modifier.padding(16.dp),
-                                        color = Color.White.copy(alpha = 0.7f),
-                                        fontSize = 12.sp,
-                                        textAlign = TextAlign.Center
-                                    )
+                                    Column(
+                                        modifier = Modifier.padding(20.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.CloudQueue,
+                                            contentDescription = null,
+                                            tint = SafetyTeal,
+                                            modifier = Modifier.size(36.dp)
+                                        )
+                                        Text(
+                                            text = if (isId) "Terhubung ke Firebase (lowerzakum-482af)" else "Connected to Firebase (lowerzakum-482af)",
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color.White,
+                                            textAlign = TextAlign.Center
+                                        )
+                                        Text(
+                                            text = if (isId)
+                                                "Belum ada akun personil di database. Silakan masuk dengan email terdaftar di tab 'Masuk', atau buat akun baru di tab 'Daftar'."
+                                            else
+                                                "No personnel registered in database yet. Please sign in with your email in 'Sign In' tab, or register a new account in 'Sign Up' tab.",
+                                            fontSize = 11.sp,
+                                            color = Color.White.copy(alpha = 0.7f),
+                                            textAlign = TextAlign.Center,
+                                            lineHeight = 16.sp
+                                        )
+                                        OutlinedButton(
+                                            onClick = { activeGateTab = 2 },
+                                            shape = RoundedCornerShape(10.dp)
+                                        ) {
+                                            Text(if (isId) "Buka Pendaftaran Akun" else "Open Registration")
+                                        }
+                                    }
                                 }
                             } else {
                                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {

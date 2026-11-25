@@ -4,14 +4,20 @@ import android.content.Context
 import android.util.Log
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.FirebaseFirestoreSettings
 import com.google.firebase.firestore.ListenerRegistration
+import com.google.firebase.firestore.PersistentCacheSettings
 import com.google.firebase.firestore.Query
 import com.google.firebase.firestore.SetOptions
+import com.google.firebase.messaging.FirebaseMessaging
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
@@ -19,7 +25,19 @@ import kotlinx.coroutines.withContext
 class FirestoreManager(private val context: Context) {
 
     private val tag = "FirestoreManager"
-    private val firestore: FirebaseFirestore by lazy { FirebaseFirestore.getInstance() }
+    private val firestore: FirebaseFirestore by lazy {
+        FirebaseFirestore.getInstance().apply {
+            runCatching {
+                firestoreSettings = FirebaseFirestoreSettings.Builder()
+                    .setLocalCacheSettings(
+                        PersistentCacheSettings.newBuilder()
+                            .setSizeBytes(100L * 1024 * 1024)
+                            .build()
+                    )
+                    .build()
+            }
+        }
+    }
 
     private val _users = MutableStateFlow<List<FirestoreUser>>(emptyList())
     val users: StateFlow<List<FirestoreUser>> = _users.asStateFlow()
@@ -30,14 +48,25 @@ class FirestoreManager(private val context: Context) {
     private val _activeProject = MutableStateFlow<FirestoreProject?>(null)
     val activeProject: StateFlow<FirestoreProject?> = _activeProject.asStateFlow()
 
+    private val _remoteFindings = MutableStateFlow<List<FirestoreFindingDocument>>(emptyList())
+    val remoteFindings: StateFlow<List<FirestoreFindingDocument>> = _remoteFindings.asStateFlow()
+
+    private val _remoteNotifications = MutableStateFlow<List<FirestoreNotification>>(emptyList())
+    val remoteNotifications: StateFlow<List<FirestoreNotification>> = _remoteNotifications.asStateFlow()
+
+    private val _lastSyncTimestamp = MutableStateFlow(0L)
+    val lastSyncTimestamp: StateFlow<Long> = _lastSyncTimestamp.asStateFlow()
+
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
-    private val _statusMessage = MutableStateFlow<String?>(null)
+    private val _statusMessage = MutableStateFlow<String?> (null)
     val statusMessage: StateFlow<String?> = _statusMessage.asStateFlow()
 
     private var usersListener: ListenerRegistration? = null
     private var projectsListener: ListenerRegistration? = null
+    private var findingsListener: ListenerRegistration? = null
+    private var notificationsListener: ListenerRegistration? = null
 
     private val prefs = context.getSharedPreferences("lsr_firestore_prefs", Context.MODE_PRIVATE)
 
@@ -49,145 +78,34 @@ class FirestoreManager(private val context: Context) {
 
     private fun loadCachedData() {
         val cachedActiveProjectId = prefs.getString("active_project_id", "") ?: ""
-        // Provide rich default projects & users matching Firestore structure
-        val defaultUsers = listOf(
-            FirestoreUser(
-                uid = "0GiEAk5NPbVuCiZAfvwQVhwucTN2",
-                displayName = "Dika",
-                email = "tb.dikakurnia@gmail.com",
-                company = "Unassigned",
-                position = "Lead HSE Inspector",
-                photoURL = null,
-                aiEnabled = false,
-                projectIds = listOf("3n97CeSEhhQhFKQiuUvW")
-            ),
-            FirestoreUser(
-                uid = "8xnYYEXlXZfvJK0w3BKMtWGjiit2",
-                displayName = "Rully Beriandi",
-                email = "beriandirully@gmail.com",
-                company = "PT Pertamina Hulu Energi",
-                position = "HSSE Operations Lead",
-                photoURL = null,
-                aiEnabled = true,
-                projectIds = listOf("3n97CeSEhhQhFKQiuUvW", "0eyVSkUyrGZVeo141IJL")
-            ),
-            FirestoreUser(
-                uid = "rLOEaSDR7JVIA7Air36KqMiLTTo2",
-                displayName = "Ahmad Fauzi",
-                email = "ahmad.fauzi@company.com",
-                company = "PT Chevron Pacific Indonesia",
-                position = "Rig Mechanical Supervisor",
-                photoURL = null,
-                aiEnabled = false,
-                projectIds = listOf("3n97CeSEhhQhFKQiuUvW")
-            ),
-            FirestoreUser(
-                uid = "6qiGyW7U3VfyRyy5XCayLpAuaTK2",
-                displayName = "Budi Santoso",
-                email = "budi.santoso@company.com",
-                company = "PT Schlumberger Geophysics",
-                position = "Lead Electrical Engineer",
-                photoURL = null,
-                aiEnabled = false,
-                projectIds = listOf("3n97CeSEhhQhFKQiuUvW")
-            ),
-            FirestoreUser(
-                uid = "4GQ2zwAB3jPx2DjONIFTagaOrml2",
-                displayName = "Siti Rahma",
-                email = "siti.rahma@company.com",
-                company = "PT Medco E&P Indonesia",
-                position = "Scaffolding Inspector & Lead",
-                photoURL = null,
-                aiEnabled = false,
-                projectIds = listOf("3n97CeSEhhQhFKQiuUvW")
-            ),
-            FirestoreUser(
-                uid = "0CPU9BOTCWQr50vEVJ1twcQ3WBg1",
-                displayName = "Doni Prasetyo",
-                email = "doni.prasetyo@company.com",
-                company = "PT Halliburton Indonesia",
-                position = "Production Field Supervisor",
-                photoURL = null,
-                aiEnabled = false,
-                projectIds = listOf("1gFXLn4g9HOk39KvyuLn")
+        val cachedActiveProjectName = prefs.getString("active_project_name", "") ?: ""
+
+        // Production state: No hardcoded dummy data!
+        _users.value = emptyList()
+        _projects.value = emptyList()
+
+        if (cachedActiveProjectId.isNotBlank() && cachedActiveProjectName.isNotBlank()) {
+            _activeProject.value = FirestoreProject(
+                id = cachedActiveProjectId,
+                name = cachedActiveProjectName
             )
-        )
-
-        val defaultProjects = listOf(
-            FirestoreProject(
-                id = "3n97CeSEhhQhFKQiuUvW",
-                name = "HSE Observation",
-                createdAt = "2025-08-07T02:21:35.691Z",
-                ownerUid = "8xnYYEXlXZfvJK0w3BKMtWGjiit2",
-                isOpen = false,
-                memberUids = listOf(
-                    "8xnYYEXlXZfvJK0w3BKMtWGjiit2",
-                    "rLOEaSDR7JVIA7Air36KqMiLTTo2",
-                    "6qiGyW7U3VfyRyy5XCayLpAuaTK2",
-                    "4GQ2zwAB3jPx2DjONIFTagaOrml2",
-                    "0GiEAk5NPbVuCiZAfvwQVhwucTN2"
-                ),
-                customCompanies = listOf(
-                    "PT Pertamina Hulu Energi",
-                    "PT Chevron Pacific Indonesia",
-                    "PT Medco E&P Indonesia",
-                    "PT Schlumberger Geophysics",
-                    "PT Halliburton Indonesia",
-                    "HSSE Tech Operations"
-                ),
-                customLocations = listOf(
-                    "Rig Deck #01 - Offshore",
-                    "Processing Facility Block A",
-                    "Wellhead Area WHP-3",
-                    "Gas Compressor Station",
-                    "Chemical Storage Yard",
-                    "Confined Space Tank TK-204",
-                    "Electrical Switchgear Room"
-                ),
-                customObservationCategories = listOf("Safe Act", "Unsafe Act", "Unsafe Condition", "Near Miss")
-            ),
-            FirestoreProject(
-                id = "0eyVSkUyrGZVeo141IJL",
-                name = "Offshore Drilling Campaign 2026",
-                createdAt = "2026-01-15T08:00:00.000Z",
-                ownerUid = "8xnYYEXlXZfvJK0w3BKMtWGjiit2",
-                isOpen = false,
-                memberUids = listOf("8xnYYEXlXZfvJK0w3BKMtWGjiit2", "0GiEAk5NPbVuCiZAfvwQVhwucTN2"),
-                customCompanies = listOf("PT Pertamina Hulu Rokan", "PT Baker Hughes"),
-                customLocations = listOf("Jack-Up Rig Emerald-1", "Mud Pit Area", "Helideck Platform"),
-                customObservationCategories = listOf("LSR Non-Compliance", "Good Practice")
-            ),
-            FirestoreProject(
-                id = "1gFXLn4g9HOk39KvyuLn",
-                name = "Refinery Maintenance & Turnaround",
-                createdAt = "2026-02-01T10:30:00.000Z",
-                ownerUid = "0CPU9BOTCWQr50vEVJ1twcQ3WBg1",
-                isOpen = true,
-                memberUids = listOf("0CPU9BOTCWQr50vEVJ1twcQ3WBg1"),
-                customCompanies = listOf("PT Kilang Pertamina Internasional", "PT Tripatra"),
-                customLocations = listOf("Crude Distillation Unit (CDU)", "Boiler House", "Flare Stack Zone"),
-                customObservationCategories = listOf("Hot Work", "Working at Height", "Isolation of Energy")
-            )
-        )
-
-        _users.value = defaultUsers
-        _projects.value = defaultProjects
-
-        val selected = defaultProjects.find { it.id == cachedActiveProjectId } ?: defaultProjects.firstOrNull()
-        _activeProject.value = selected
+        } else {
+            _activeProject.value = null
+        }
     }
 
     fun startRealtimeListeners() {
         try {
-            // Listen to `users` collection
+            // Listen to `users` collection (bounded to 100 docs to control reads at scale)
             usersListener?.remove()
             usersListener = firestore.collection("users")
+                .limit(100)
                 .addSnapshotListener { snapshot, error ->
                     if (error != null) {
                         Log.w(tag, "Listen failed for users collection: ${error.message}")
                         return@addSnapshotListener
                     }
-                    if (snapshot != null && !snapshot.isEmpty) {
+                    if (snapshot != null) {
                         val parsedUsers = snapshot.documents.mapNotNull { doc ->
                             try {
                                 val uid = doc.getString("uid") ?: doc.id
@@ -220,22 +138,21 @@ class FirestoreManager(private val context: Context) {
                                 null
                             }
                         }
-                        if (parsedUsers.isNotEmpty()) {
-                            _users.value = parsedUsers
-                            Log.d(tag, "Loaded ${parsedUsers.size} users from Firestore collection 'users'")
-                        }
+                        _users.value = parsedUsers
+                        Log.d(tag, "Firestore Realtime: Loaded ${parsedUsers.size} users")
                     }
                 }
 
-            // Listen to `projects` collection
+            // Listen to `projects` collection (bounded to 50 workspaces)
             projectsListener?.remove()
             projectsListener = firestore.collection("projects")
+                .limit(50)
                 .addSnapshotListener { snapshot, error ->
                     if (error != null) {
                         Log.w(tag, "Listen failed for projects collection: ${error.message}")
                         return@addSnapshotListener
                     }
-                    if (snapshot != null && !snapshot.isEmpty) {
+                    if (snapshot != null) {
                         val parsedProjects = snapshot.documents.mapNotNull { doc ->
                             try {
                                 val id = doc.getString("id") ?: doc.id
@@ -270,6 +187,9 @@ class FirestoreManager(private val context: Context) {
 
                                 @Suppress("UNCHECKED_CAST")
                                 val roles = (doc.get("roles") as? Map<String, Any>) ?: emptyMap()
+                                val totalFindings = (doc.getLong("totalFindings") ?: 0L).toInt()
+                                val openFindings = (doc.getLong("openFindings") ?: 0L).toInt()
+                                val closedFindings = (doc.getLong("closedFindings") ?: 0L).toInt()
 
                                 FirestoreProject(
                                     id = id,
@@ -281,32 +201,111 @@ class FirestoreManager(private val context: Context) {
                                     customCompanies = customCompanies,
                                     customLocations = customLocations,
                                     customObservationCategories = customObservationCategories,
-                                    roles = roles
+                                    roles = roles,
+                                    totalFindings = totalFindings,
+                                    openFindings = openFindings,
+                                    closedFindings = closedFindings
                                 )
                             } catch (e: Exception) {
                                 Log.e(tag, "Error parsing project doc ${doc.id}", e)
                                 null
                             }
                         }
-                        if (parsedProjects.isNotEmpty()) {
-                            _projects.value = parsedProjects
-                            Log.d(tag, "Loaded ${parsedProjects.size} projects from Firestore collection 'projects'")
+                        _projects.value = parsedProjects
+                        Log.d(tag, "Firestore Realtime: Loaded ${parsedProjects.size} projects")
 
-                            // If active project is not set or not in list, pick appropriate
-                            val current = _activeProject.value
-                            if (current == null || parsedProjects.none { it.id == current.id }) {
-                                _activeProject.value = parsedProjects.firstOrNull()
-                            } else {
-                                // Refresh current project data with new snapshot
-                                parsedProjects.find { it.id == current.id }?.let {
-                                    _activeProject.value = it
-                                }
+                        // If active project is not set or not in list, pick appropriate
+                        val current = _activeProject.value
+                        if (current == null || parsedProjects.none { it.id == current.id }) {
+                            val cachedId = prefs.getString("active_project_id", "") ?: ""
+                            val match = parsedProjects.find { it.id == cachedId } ?: parsedProjects.firstOrNull()
+                            if (match != null) {
+                                selectActiveProject(match)
+                            }
+                        } else {
+                            // Refresh current project data with new snapshot
+                            parsedProjects.find { it.id == current.id }?.let {
+                                _activeProject.value = it
                             }
                         }
                     }
                 }
         } catch (e: Exception) {
             Log.e(tag, "Error starting Firestore listeners", e)
+        }
+    }
+
+    suspend fun ensureDefaultWorkspace(
+        creatorUid: String,
+        creatorEmail: String,
+        creatorCompany: String
+    ): Result<FirestoreProject> {
+        return withContext(Dispatchers.IO) {
+            try {
+                val existing = firestore.collection("projects").get().await()
+                if (!existing.isEmpty) {
+                    val firstDoc = existing.documents.first()
+                    val p = FirestoreProject(
+                        id = firstDoc.id,
+                        name = firstDoc.getString("name") ?: firstDoc.id,
+                        code = firstDoc.getString("code") ?: "LZ-HSE",
+                        ownerUid = firstDoc.getString("ownerUid") ?: "",
+                        isOpen = firstDoc.getBoolean("isOpen") ?: true
+                    )
+                    selectActiveProject(p)
+                    return@withContext Result.success(p)
+                }
+
+                val defaultProject = FirestoreProject(
+                    id = "lower-zakum-operations",
+                    name = "Lower Zakum Offshore Operations",
+                    code = "LZ-HSE",
+                    createdAt = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.US).format(java.util.Date()),
+                    ownerUid = creatorUid,
+                    isOpen = true,
+                    memberUids = if (creatorUid.isNotBlank()) listOf(creatorUid) else emptyList(),
+                    customCompanies = listOf(
+                        creatorCompany.ifBlank { "Lower Zakum Operations" },
+                        "HSSE Tech Operations"
+                    ),
+                    customLocations = listOf(
+                        "Wellhead Platform (WHP-01)",
+                        "Central Complex (CC)",
+                        "Gas Treatment Plant (GTP)",
+                        "Drilling Rig Deck",
+                        "Living Quarters (LQ)",
+                        "Flare Platform & Bridge"
+                    ),
+                    customObservationCategories = listOf(
+                        "Safe Act",
+                        "Unsafe Act",
+                        "Unsafe Condition",
+                        "Near Miss",
+                        "LSR Non-Compliance"
+                    )
+                )
+
+                val projectMap = hashMapOf<String, Any>(
+                    "id" to defaultProject.id,
+                    "name" to defaultProject.name,
+                    "code" to defaultProject.code,
+                    "createdAt" to defaultProject.createdAt,
+                    "ownerUid" to defaultProject.ownerUid,
+                    "isOpen" to defaultProject.isOpen,
+                    "memberUids" to defaultProject.memberUids,
+                    "customCompanies" to defaultProject.customCompanies,
+                    "customLocations" to defaultProject.customLocations,
+                    "customObservationCategories" to defaultProject.customObservationCategories
+                )
+
+                firestore.collection("projects").document(defaultProject.id).set(projectMap, SetOptions.merge()).await()
+                selectActiveProject(defaultProject)
+                Log.d(tag, "Initialized default workspace in Firestore: ${defaultProject.name}")
+                Result.success(defaultProject)
+            } catch (e: Exception) {
+                Log.e(tag, "Failed to ensure default workspace: ${e.message}", e)
+                Result.failure(e)
+            }
         }
     }
 
@@ -445,11 +444,106 @@ class FirestoreManager(private val context: Context) {
     }
 
     /**
-     * Set active project and save preference
+     * Set active project, save preference, and scope findings listener to active workspace only.
      */
     fun selectActiveProject(project: FirestoreProject) {
+        val changed = _activeProject.value?.id != project.id
         _activeProject.value = project
-        prefs.edit().putString("active_project_id", project.id).apply()
+        prefs.edit()
+            .putString("active_project_id", project.id)
+            .putString("active_project_name", project.name)
+            .apply()
+        if (changed || findingsListener == null) {
+            startScopedFindingsListener(project.id)
+        }
+    }
+
+    /**
+     * Workspace-scoped realtime listener for findings in the active project (bounded to 100 latest updates).
+     */
+    fun startScopedFindingsListener(projectId: String) {
+        if (projectId.isBlank()) return
+        try {
+            findingsListener?.remove()
+            findingsListener = firestore.collection("projects")
+                .document(projectId)
+                .collection("findings")
+                .orderBy("updatedAt", Query.Direction.DESCENDING)
+                .limit(100)
+                .addSnapshotListener { snapshot, error ->
+                    if (error != null) {
+                        Log.w(tag, "Scoped findings listen note for $projectId: ${error.message}")
+                        return@addSnapshotListener
+                    }
+                    if (snapshot != null) {
+                        val docs = snapshot.documents.mapNotNull { parseFindingDoc(it, projectId) }
+                        _remoteFindings.value = docs
+                        val now = System.currentTimeMillis()
+                        _lastSyncTimestamp.value = now
+                        prefs.edit().putLong("last_findings_sync_$projectId", now).apply()
+                    }
+                }
+        } catch (e: Exception) {
+            Log.w(tag, "Failed starting scoped findings listener: ${e.message}")
+        }
+    }
+
+    /**
+     * Incremental delta sync for the active project (fetches only docs updated since lastSync).
+     */
+    suspend fun syncDeltaForActiveProject(): Result<Int> = withContext(Dispatchers.IO) {
+        val projId = _activeProject.value?.id ?: return@withContext Result.success(0)
+        try {
+            val lastSync = prefs.getLong("last_findings_sync_$projId", 0L)
+            val baseRef = firestore.collection("projects").document(projId).collection("findings")
+            val snap = if (lastSync > 0L) {
+                baseRef.whereGreaterThan("updatedAt", lastSync).limit(100).get().await()
+            } else {
+                baseRef.orderBy("updatedAt", Query.Direction.DESCENDING).limit(100).get().await()
+            }
+            val deltaDocs = snap.documents.mapNotNull { parseFindingDoc(it, projId) }
+            if (deltaDocs.isNotEmpty()) {
+                val merged = (_remoteFindings.value.associateBy { it.id } + deltaDocs.associateBy { it.id })
+                    .values
+                    .sortedByDescending { it.updatedAt }
+                _remoteFindings.value = merged
+            }
+            val now = System.currentTimeMillis()
+            _lastSyncTimestamp.value = now
+            prefs.edit().putLong("last_findings_sync_$projId", now).apply()
+            Result.success(deltaDocs.size)
+        } catch (e: Exception) {
+            Log.w(tag, "Delta sync warning: ${e.message}")
+            Result.failure(e)
+        }
+    }
+
+    private fun parseFindingDoc(doc: DocumentSnapshot, projectId: String): FirestoreFindingDocument? {
+        return try {
+            FirestoreFindingDocument(
+                id = doc.getString("id") ?: doc.id,
+                projectId = doc.getString("projectId") ?: projectId,
+                checklistCategory = doc.getString("checklistCategory") ?: "",
+                questionText = doc.getString("questionText") ?: "",
+                description = doc.getString("description") ?: "",
+                location = doc.getString("location") ?: "",
+                severity = doc.getString("severity") ?: "HIGH",
+                status = doc.getString("status") ?: "OPEN",
+                creatorUid = doc.getString("creatorUid") ?: "",
+                creatorName = doc.getString("creatorName") ?: "",
+                creatorEmail = doc.getString("creatorEmail") ?: "",
+                picName = doc.getString("picName") ?: "",
+                picEmail = doc.getString("picEmail") ?: "",
+                picRole = doc.getString("picRole") ?: "",
+                actionTaken = doc.getString("actionTaken") ?: "",
+                picRating = (doc.getLong("picRating") ?: 0L).toInt(),
+                verificationRemarks = doc.getString("verificationRemarks") ?: "",
+                createdAt = doc.getLong("createdAt") ?: 0L,
+                updatedAt = doc.getLong("updatedAt") ?: 0L
+            )
+        } catch (e: Exception) {
+            null
+        }
     }
 
     /**
@@ -658,8 +752,154 @@ class FirestoreManager(private val context: Context) {
         }
     }
 
+    fun syncFcmToken(uid: String) {
+        if (uid.isBlank()) return
+        runCatching {
+            FirebaseMessaging.getInstance().token.addOnSuccessListener { token ->
+                if (!token.isNullOrBlank()) {
+                    firestore.collection("users")
+                        .document(uid)
+                        .set(
+                            mapOf("fcmToken" to token, "updatedAt" to System.currentTimeMillis()),
+                            SetOptions.merge()
+                        )
+                        .addOnFailureListener { e ->
+                            Log.w(tag, "FCM token save note: ${e.message}")
+                        }
+                }
+            }
+        }
+    }
+
+    /**
+     * Scoped realtime listener for cross-user notifications, reminders, and finding messages.
+     * Uses single-field index on `timestamp` (works out-of-the-box) and filters client-side for recipient.
+     */
+    fun startScopedNotificationsListener(
+        projectId: String,
+        userUid: String,
+        userEmail: String
+    ) {
+        if (projectId.isBlank()) return
+        try {
+            notificationsListener?.remove()
+            notificationsListener = firestore.collection("projects")
+                .document(projectId)
+                .collection("notifications")
+                .orderBy("timestamp", Query.Direction.DESCENDING)
+                .limit(60)
+                .addSnapshotListener { snapshot, error ->
+                    if (error != null) {
+                        Log.w(tag, "Notifications listen note for $projectId: ${error.message}")
+                        return@addSnapshotListener
+                    }
+                    if (snapshot != null) {
+                        val parsed = snapshot.documents.mapNotNull { doc ->
+                            runCatching {
+                                FirestoreNotification(
+                                    id = doc.getString("id") ?: doc.id,
+                                    projectId = doc.getString("projectId") ?: projectId,
+                                    projectName = doc.getString("projectName") ?: "",
+                                    findingId = doc.getString("findingId") ?: "",
+                                    recipientUid = doc.getString("recipientUid") ?: "",
+                                    recipientEmail = doc.getString("recipientEmail") ?: "",
+                                    senderUid = doc.getString("senderUid") ?: "",
+                                    senderName = doc.getString("senderName") ?: "",
+                                    senderEmail = doc.getString("senderEmail") ?: "",
+                                    title = doc.getString("title") ?: "",
+                                    message = doc.getString("message") ?: "",
+                                    type = doc.getString("type") ?: "ASSIGNMENT",
+                                    isCritical = doc.getBoolean("isCritical") ?: false,
+                                    isBroadcast = doc.getBoolean("isBroadcast") ?: false,
+                                    isRead = doc.getBoolean("isRead") ?: false,
+                                    timestamp = doc.getLong("timestamp") ?: 0L
+                                )
+                            }.getOrNull()
+                        }.filter { n ->
+                            val matchesUid = userUid.isNotBlank() && n.recipientUid == userUid
+                            val matchesEmail = userEmail.isNotBlank() && n.recipientEmail.equals(userEmail, ignoreCase = true)
+                            val isPublicOrCritical = n.isBroadcast || (n.recipientUid.isBlank() && n.recipientEmail.isBlank())
+                            matchesUid || matchesEmail || isPublicOrCritical
+                        }
+                        _remoteNotifications.value = parsed
+                    }
+                }
+        } catch (e: Exception) {
+            Log.w(tag, "Failed starting notifications listener: ${e.message}")
+        }
+    }
+
+    suspend fun pushCrossUserNotification(notification: FirestoreNotification): Result<Unit> {
+        return withContext(Dispatchers.IO) {
+            try {
+                val projId = notification.projectId.ifBlank { _activeProject.value?.id ?: "lower-zakum-operations" }
+                val notifId = notification.id.ifBlank { "notif_${System.currentTimeMillis()}_${(100..999).random()}" }
+                val finalDoc = notification.copy(
+                    id = notifId,
+                    projectId = projId,
+                    projectName = notification.projectName.ifBlank { _activeProject.value?.name ?: "" }
+                )
+                firestore.collection("projects")
+                    .document(projId)
+                    .collection("notifications")
+                    .document(notifId)
+                    .set(finalDoc, SetOptions.merge())
+                    .await()
+                Result.success(Unit)
+            } catch (e: Exception) {
+                Log.w(tag, "Cross-user notification push note: ${e.message}")
+                Result.failure(e)
+            }
+        }
+    }
+
+    fun observeFindingActionLogs(projectId: String, findingDocId: String): Flow<List<FirestoreActionLog>> = callbackFlow {
+        val projId = projectId.ifBlank { _activeProject.value?.id ?: "lower-zakum-operations" }
+        if (findingDocId.isBlank()) {
+            trySend(emptyList())
+            close()
+            return@callbackFlow
+        }
+        val registration = firestore.collection("projects")
+            .document(projId)
+            .collection("findings")
+            .document(findingDocId)
+            .collection("action_logs")
+            .orderBy("timestamp", Query.Direction.ASCENDING)
+            .limit(100)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    return@addSnapshotListener
+                }
+                if (snapshot != null) {
+                    val logs = snapshot.documents.mapNotNull { doc ->
+                        runCatching {
+                            FirestoreActionLog(
+                                id = doc.getString("id") ?: doc.id,
+                                findingId = doc.getString("findingId") ?: findingDocId,
+                                projectId = doc.getString("projectId") ?: projId,
+                                timestamp = doc.getLong("timestamp") ?: 0L,
+                                actorUid = doc.getString("actorUid") ?: "",
+                                actorName = doc.getString("actorName") ?: "",
+                                actorRole = doc.getString("actorRole") ?: "",
+                                actionType = doc.getString("actionType") ?: "COMMENT",
+                                oldStatus = doc.getString("oldStatus") ?: "",
+                                newStatus = doc.getString("newStatus") ?: "",
+                                remarks = doc.getString("remarks") ?: "",
+                                rating = (doc.getLong("rating") ?: 0L).toInt()
+                            )
+                        }.getOrNull()
+                    }
+                    trySend(logs)
+                }
+            }
+        awaitClose { registration.remove() }
+    }
+
     fun cleanup() {
         usersListener?.remove()
         projectsListener?.remove()
+        findingsListener?.remove()
+        notificationsListener?.remove()
     }
 }

@@ -1,9 +1,16 @@
 package com.example.ui
 
+import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.compose.animation.*
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
@@ -28,6 +35,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -66,7 +75,6 @@ fun LsrInspectionApp(
     val activeAnswers by viewModel.activeAnswers.collectAsState()
     val historyRecords by viewModel.historyRecords.collectAsState()
     val findings by viewModel.findings.collectAsState()
-    val notifications by viewModel.notifications.collectAsState()
     val unreadNotificationsCount by viewModel.unreadNotificationsCount.collectAsState()
     val teamRoster = viewModel.teamRoster
     val firestoreUsers by viewModel.firestoreUsers.collectAsState()
@@ -84,7 +92,23 @@ fun LsrInspectionApp(
     val firebaseUrl by viewModel.firebaseUrl.collectAsState()
     val isFirebaseEnabled by viewModel.isFirebaseEnabled.collectAsState()
     val currentTab by viewModel.currentTab.collectAsState()
+    val settingsSection by viewModel.settingsSection.collectAsState()
+    val notifPicAlerts by viewModel.notifPicAlerts.collectAsState()
+    val notifCriticalAlerts by viewModel.notifCriticalAlerts.collectAsState()
+    val notifDraftReminder by viewModel.notifDraftReminder.collectAsState()
+    val hapticFeedbackEnabled by viewModel.hapticFeedbackEnabled.collectAsState()
     val isSubmitting by viewModel.isSubmitting.collectAsState()
+    val feedSummaries by viewModel.feedSummaries.collectAsState()
+    val totalAuditsCount by viewModel.totalAuditsCount.collectAsState()
+    val dashboardMetrics by viewModel.dashboardMetrics.collectAsState()
+    val dashboardPerspective by viewModel.dashboardPerspective.collectAsState()
+    val notificationsWindow by viewModel.notificationsWindow.collectAsState()
+    val totalNotificationsCount by viewModel.totalNotificationsCount.collectAsState()
+    val pendingSyncCount by viewModel.pendingSyncCount.collectAsState()
+    val isRefreshing by viewModel.isRefreshing.collectAsState()
+    val appThemeMode by viewModel.appThemeMode.collectAsState()
+    val feedFilterCriteria by viewModel.feedFilterCriteria.collectAsState()
+    val findingsFilterCriteria by viewModel.findingsFilterCriteria.collectAsState()
 
     // Firebase Auth states
     val currentUser by viewModel.currentUser.collectAsState()
@@ -97,6 +121,11 @@ fun LsrInspectionApp(
     var showGasGuideDialog by remember { mutableStateOf(false) }
     var showSubmitConfirmationDialog by remember { mutableStateOf(false) }
     var showRecordDetailDialog by remember { mutableStateOf<InspectionRecord?>(null) }
+    var requestedNotifPermission by remember { mutableStateOf(false) }
+
+    val notifPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { /* Permission result handled gracefully by NotificationHelper */ }
 
     // Count open findings for the tab badge
     val openFindingsCount = remember(findings) {
@@ -107,6 +136,20 @@ fun LsrInspectionApp(
     LaunchedEffect(Unit) {
         viewModel.uiMessage.collectLatest { message ->
             snackbarHostState.showSnackbar(message)
+        }
+    }
+
+    // Request Android 13+ notification permission once logged in
+    LaunchedEffect(currentUser?.uid) {
+        if (currentUser != null && !requestedNotifPermission && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val granted = ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) == PackageManager.PERMISSION_GRANTED
+            if (!granted) {
+                requestedNotifPermission = true
+                notifPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
         }
     }
 
@@ -266,23 +309,24 @@ fun LsrInspectionApp(
                             )
                         )
 
-                        // Tab 4: Profile & Cloud
-                        val isProfileSelected = currentTab == AppNavTab.PROFILE
+                        // Tab 4: Centralized Settings Hub
+                        val isSettingsSelected = currentTab == AppNavTab.SETTINGS
                         NavigationBarItem(
-                            selected = isProfileSelected,
-                            onClick = { viewModel.selectTab(AppNavTab.PROFILE) },
+                            selected = isSettingsSelected,
+                            onClick = { viewModel.selectTab(AppNavTab.SETTINGS) },
                             icon = {
                                 Icon(
-                                    if (isProfileSelected) Icons.Filled.AccountCircle else Icons.Outlined.AccountCircle,
-                                    contentDescription = AppStrings.get("tab_profile", appLanguage),
+                                    if (isSettingsSelected) Icons.Filled.Settings else Icons.Outlined.Settings,
+                                    contentDescription = AppStrings.get("tab_settings", appLanguage),
                                     modifier = Modifier.size(24.dp)
                                 )
                             },
                             label = {
                                 Text(
-                                    text = AppStrings.get("tab_profile", appLanguage),
-                                    fontWeight = if (isProfileSelected) FontWeight.Bold else FontWeight.Medium,
-                                    fontSize = 11.sp
+                                    text = AppStrings.get("tab_settings", appLanguage),
+                                    fontWeight = if (isSettingsSelected) FontWeight.Bold else FontWeight.Medium,
+                                    fontSize = 11.sp,
+                                    maxLines = 1
                                 )
                             },
                             colors = NavigationBarItemDefaults.colors(
@@ -330,6 +374,7 @@ fun LsrInspectionApp(
                         totalQuestions = filteredChecklistItems.size,
                         inspectorInitials = if (inspectorName.isNotBlank()) inspectorName.take(2).uppercase() else "IN",
                         onSelectQuestionIndex = { idx -> viewModel.selectQuestionIndex(idx) },
+                        hapticFeedbackEnabled = hapticFeedbackEnabled,
                         onAnswerSelected = { type ->
                             viewModel.updateAnswer(currentQuestion.id, type, currentAnswerData.notes)
                         },
@@ -378,6 +423,10 @@ fun LsrInspectionApp(
                                     area = area,
                                     activeAnswers = activeAnswers,
                                     historyRecords = historyRecords,
+                                    dashboardMetrics = dashboardMetrics,
+                                    pendingSyncCount = pendingSyncCount,
+                                    dashboardPerspective = dashboardPerspective,
+                                    onPerspectiveChanged = { viewModel.setDashboardPerspective(it) },
                                     findings = findings,
                                     currentUser = currentUser,
                                     activeProject = activeProject,
@@ -386,8 +435,8 @@ fun LsrInspectionApp(
                                     availableCategories = availableCategories,
                                     onToggleCategory = { viewModel.toggleCategory(it) },
                                     onSelectAllCategories = { viewModel.selectAllCategories() },
-                                    onLanguageToggle = { viewModel.toggleLanguage() },
                                     onOpenAuthDialog = { showAuthDialog = true },
+                                    onOpenProfileSettings = { viewModel.openSettingsSection(SettingsSection.PROFILE) },
                                     onInspectorDetailsChanged = { name, loc ->
                                         viewModel.setInspectorDetails(name, loc)
                                     },
@@ -397,23 +446,79 @@ fun LsrInspectionApp(
                                 )
                             }
                             AppNavTab.FEED -> {
+                                val resolvedRosterNames = remember(combinedTeamRoster, teamRoster) {
+                                    (combinedTeamRoster.ifEmpty { teamRoster }).map { it.name }.distinct()
+                                }
                                 FeedScreen(
                                     language = appLanguage,
-                                    historyRecords = historyRecords,
-                                    checklistItems = checklistItems,
-                                    notifications = notifications,
+                                    feedSummaries = feedSummaries,
+                                    totalAuditsCount = totalAuditsCount,
+                                    notifications = notificationsWindow,
+                                    totalNotificationsCount = totalNotificationsCount,
                                     unreadCount = unreadNotificationsCount,
-                                    onRecordClicked = { record -> showRecordDetailDialog = record },
+                                    pendingSyncCount = pendingSyncCount,
+                                    isRefreshing = isRefreshing,
+                                    currentInspectorName = inspectorName,
+                                    filterCriteria = feedFilterCriteria,
+                                    onFilterCriteriaChange = { viewModel.setFeedFilterCriteria(it) },
+                                    availableUsers = resolvedRosterNames,
+                                    availableLsrTypes = availableCategories,
+                                    availableCompanies = activeProject?.customCompanies ?: emptyList(),
+                                    availableLocations = activeProject?.customLocations ?: emptyList(),
+                                    onRecordClicked = { recordId ->
+                                        viewModel.loadRecordDetail(recordId) { loaded ->
+                                            showRecordDetailDialog = loaded
+                                        }
+                                    },
+                                    onLoadMoreFeed = { viewModel.loadMoreFeed() },
+                                    onLoadMoreNotifications = { viewModel.loadMoreNotifications() },
+                                    onRefresh = { viewModel.refreshAllData() },
+                                    onRetrySync = { viewModel.retryPendingSync() },
+                                    onExportCsv = {
+                                        viewModel.exportBatchCsv { uri ->
+                                            shareExportedFile(
+                                                context = context,
+                                                uri = uri,
+                                                mimeType = "text/csv",
+                                                chooserTitle = if (appLanguage == AppLanguage.ID) "Ekspor Batch CSV" else "Export Batch CSV"
+                                            )
+                                        }
+                                    },
                                     onMarkNotificationRead = { id -> viewModel.markNotificationRead(id) },
                                     onMarkAllNotificationsRead = { viewModel.markAllNotificationsRead() },
-                                    onClearNotifications = { viewModel.clearNotifications() }
+                                    onDeleteReadNotifications = { viewModel.deleteReadNotifications() }
                                 )
                             }
                             AppNavTab.FINDINGS -> {
                                 FindingsScreen(
                                     language = appLanguage,
                                     findings = findings,
-                                    teamRoster = teamRoster,
+                                    teamRoster = combinedTeamRoster.ifEmpty { teamRoster },
+                                    isRefreshing = isRefreshing,
+                                    filterCriteria = findingsFilterCriteria,
+                                    onFilterCriteriaChange = { viewModel.setFindingsFilterCriteria(it) },
+                                    availableCompanies = activeProject?.customCompanies ?: emptyList(),
+                                    availableLocations = activeProject?.customLocations ?: emptyList(),
+                                    onRefresh = { viewModel.refreshAllData() },
+                                    onExportCsv = {
+                                        viewModel.exportBatchCsv { uri ->
+                                            shareExportedFile(
+                                                context = context,
+                                                uri = uri,
+                                                mimeType = "text/csv",
+                                                chooserTitle = if (appLanguage == AppLanguage.ID) "Ekspor Temuan CSV" else "Export Findings CSV"
+                                            )
+                                        }
+                                    },
+                                    onAttachEvidencePhoto = { findingId, sourceUri ->
+                                        viewModel.attachFindingEvidencePhoto(findingId, sourceUri)
+                                    },
+                                    onSendFindingMessage = { findingId, msg ->
+                                        viewModel.sendFindingMessage(findingId, msg)
+                                    },
+                                    onSendReminderPing = { findingId ->
+                                        viewModel.sendReminderPing(findingId)
+                                    },
                                     onGetActionLogs = { findingId -> viewModel.getActionLogsFlow(findingId) },
                                     onAssignPic = { findingId, name, email, role ->
                                         viewModel.assignPicToFinding(findingId, name, email, role)
@@ -435,21 +540,38 @@ fun LsrInspectionApp(
                                     }
                                 )
                             }
-                            AppNavTab.PROFILE -> {
-                                ProfileScreen(
+                            AppNavTab.SETTINGS -> {
+                                SettingsScreen(
+                                    currentSection = settingsSection,
+                                    onSelectSection = { section -> viewModel.openSettingsSection(section) },
                                     language = appLanguage,
                                     inspectorName = inspectorName,
-                                    area = area,
                                     companyName = companyName,
                                     inspectorRole = inspectorRole,
                                     inspectorCert = inspectorCert,
                                     currentUser = currentUser,
                                     activeProject = activeProject,
-                                    onOpenProjectDialog = { showProjectSelectDialog = true },
+                                    checklistItems = checklistItems,
+                                    availableCategories = availableCategories,
+                                    selectedCategories = selectedCategories,
+                                    onToggleCategory = { viewModel.toggleCategory(it) },
+                                    onSelectAllCategories = { viewModel.selectAllCategories() },
                                     scriptUrl = scriptUrl,
                                     isGasEnabled = isGasEnabled,
                                     firebaseUrl = firebaseUrl,
                                     isFirebaseEnabled = isFirebaseEnabled,
+                                    notifPicAlerts = notifPicAlerts,
+                                    notifCriticalAlerts = notifCriticalAlerts,
+                                    notifDraftReminder = notifDraftReminder,
+                                    hapticFeedbackEnabled = hapticFeedbackEnabled,
+                                    pendingSyncCount = pendingSyncCount,
+                                    onRetryPendingSync = { viewModel.retryPendingSync() },
+                                    themeMode = appThemeMode,
+                                    onThemeModeChange = { viewModel.setAppThemeMode(it) },
+                                    onToggleNotifPic = { viewModel.setNotifPicAlerts(it) },
+                                    onToggleNotifCritical = { viewModel.setNotifCriticalAlerts(it) },
+                                    onToggleNotifDraft = { viewModel.setNotifDraftReminder(it) },
+                                    onToggleHaptic = { viewModel.setHapticFeedbackEnabled(it) },
                                     onLanguageChange = { viewModel.setLanguage(it) },
                                     onSaveProfile = { comp, role, cert ->
                                         viewModel.saveProfileDetails(comp, role, cert)
@@ -459,6 +581,8 @@ fun LsrInspectionApp(
                                     },
                                     onTestGas = { viewModel.testGasConnection() },
                                     onTestFirebase = { viewModel.testFirebaseConnection() },
+                                    onRefreshCloud = { viewModel.refreshFirestoreData() },
+                                    onOpenProjectDialog = { showProjectSelectDialog = true },
                                     onOpenGasGuide = { showGasGuideDialog = true },
                                     onOpenChecklistManager = { showChecklistManagerDialog = true },
                                     onOpenAuthDialog = { showAuthDialog = true },
@@ -559,6 +683,16 @@ fun LsrInspectionApp(
             language = appLanguage,
             record = record,
             checklistItems = checklistItems,
+            onExportPdf = {
+                viewModel.exportRecordToPdf(record) { uri ->
+                    shareExportedFile(
+                        context = context,
+                        uri = uri,
+                        mimeType = "application/pdf",
+                        chooserTitle = if (appLanguage == AppLanguage.ID) "Bagikan PDF Laporan K3" else "Share HSE Audit PDF"
+                    )
+                }
+            },
             onDismiss = { showRecordDetailDialog = null }
         )
     }
@@ -634,6 +768,7 @@ fun SurveyView(
     currentIndex: Int,
     totalQuestions: Int,
     inspectorInitials: String,
+    hapticFeedbackEnabled: Boolean = true,
     onSelectQuestionIndex: (Int) -> Unit,
     onAnswerSelected: (AnswerType) -> Unit,
     onNotesChanged: (String) -> Unit,
@@ -924,7 +1059,8 @@ fun SurveyView(
                         lineHeight = 24.sp
                     )
 
-                    // Tri-State Answer Selector Buttons with clear visual feedback
+                    // Tri-State Answer Selector Buttons (glove-friendly 56dp, zero wrapping)
+                    val haptic = LocalHapticFeedback.current
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -932,68 +1068,86 @@ fun SurveyView(
                         // YES Button
                         val isYes = answerData.answer == AnswerType.YES
                         Button(
-                            onClick = { onAnswerSelected(AnswerType.YES) },
+                            onClick = {
+                                if (hapticFeedbackEnabled) haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                onAnswerSelected(AnswerType.YES)
+                            },
                             modifier = Modifier
                                 .weight(1f)
-                                .height(54.dp)
+                                .height(56.dp)
                                 .testTag("btn_answer_yes"),
                             shape = RoundedCornerShape(14.dp),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = if (isYes) SafetyTeal else MaterialTheme.colorScheme.surfaceVariant,
                                 contentColor = if (isYes) Color.White else MaterialTheme.colorScheme.onSurfaceVariant
                             ),
-                            elevation = if (isYes) ButtonDefaults.buttonElevation(defaultElevation = 4.dp) else ButtonDefaults.buttonElevation()
+                            elevation = if (isYes) ButtonDefaults.buttonElevation(defaultElevation = 4.dp) else ButtonDefaults.buttonElevation(0.dp)
                         ) {
                             Icon(
                                 imageVector = if (isYes) Icons.Filled.CheckCircle else Icons.Outlined.CheckCircle,
                                 contentDescription = "Yes",
                                 modifier = Modifier.size(18.dp)
                             )
-                            Spacer(modifier = Modifier.width(6.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
                             Text(
                                 text = if (language == AppLanguage.ID) "YA" else "YES",
                                 fontWeight = FontWeight.ExtraBold,
-                                fontSize = 13.sp
+                                fontSize = 13.sp,
+                                maxLines = 1,
+                                softWrap = false,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
 
                         // NO Button
                         val isNo = answerData.answer == AnswerType.NO
                         Button(
-                            onClick = { onAnswerSelected(AnswerType.NO) },
+                            onClick = {
+                                if (hapticFeedbackEnabled) haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                onAnswerSelected(AnswerType.NO)
+                            },
                             modifier = Modifier
                                 .weight(1f)
-                                .height(54.dp)
+                                .height(56.dp)
                                 .testTag("btn_answer_no"),
                             shape = RoundedCornerShape(14.dp),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = if (isNo) DangerRed else MaterialTheme.colorScheme.surfaceVariant,
                                 contentColor = if (isNo) Color.White else MaterialTheme.colorScheme.onSurfaceVariant
                             ),
-                            elevation = if (isNo) ButtonDefaults.buttonElevation(defaultElevation = 4.dp) else ButtonDefaults.buttonElevation()
+                            elevation = if (isNo) ButtonDefaults.buttonElevation(defaultElevation = 4.dp) else ButtonDefaults.buttonElevation(0.dp)
                         ) {
                             Icon(
                                 imageVector = if (isNo) Icons.Filled.Cancel else Icons.Outlined.Cancel,
                                 contentDescription = "No",
                                 modifier = Modifier.size(18.dp)
                             )
-                            Spacer(modifier = Modifier.width(6.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
                             Text(
                                 text = if (language == AppLanguage.ID) "TIDAK" else "NO",
                                 fontWeight = FontWeight.ExtraBold,
-                                fontSize = 13.sp
+                                fontSize = 13.sp,
+                                maxLines = 1,
+                                softWrap = false,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
 
                         // NA Button
                         val isNa = answerData.answer == AnswerType.NA
                         OutlinedButton(
-                            onClick = { onAnswerSelected(AnswerType.NA) },
+                            onClick = {
+                                if (hapticFeedbackEnabled) haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                onAnswerSelected(AnswerType.NA)
+                            },
                             modifier = Modifier
                                 .weight(1f)
-                                .height(54.dp)
+                                .height(56.dp)
                                 .testTag("btn_answer_na"),
                             shape = RoundedCornerShape(14.dp),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
                             colors = ButtonDefaults.outlinedButtonColors(
                                 containerColor = if (isNa) Color(0xFF475569) else Color.Transparent,
                                 contentColor = if (isNa) Color.White else MaterialTheme.colorScheme.onSurfaceVariant
@@ -1003,7 +1157,9 @@ fun SurveyView(
                             Text(
                                 text = "N/A",
                                 fontWeight = FontWeight.Bold,
-                                fontSize = 13.sp
+                                fontSize = 13.sp,
+                                maxLines = 1,
+                                softWrap = false
                             )
                         }
                     }
@@ -1646,6 +1802,20 @@ fun SubmitConfirmationDialog(
     }
 }
 
+private fun shareExportedFile(
+    context: Context,
+    uri: Uri,
+    mimeType: String,
+    chooserTitle: String
+) {
+    val sendIntent = Intent(Intent.ACTION_SEND).apply {
+        type = mimeType
+        putExtra(Intent.EXTRA_STREAM, uri)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    context.startActivity(Intent.createChooser(sendIntent, chooserTitle))
+}
+
 // ==========================================
 // 4. FULL-PAGE RECORD DETAIL DIALOG
 // ==========================================
@@ -1654,6 +1824,7 @@ fun RecordDetailDialog(
     language: AppLanguage,
     record: InspectionRecord,
     checklistItems: List<LsrItem>,
+    onExportPdf: () -> Unit = {},
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
@@ -1819,24 +1990,19 @@ fun RecordDetailDialog(
                                 .padding(16.dp),
                             horizontalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
-                            OutlinedButton(
-                                onClick = {
-                                    val summary = buildString {
-                                        appendLine("📋 *HSSE AUDIT REPORT* - Area: ${record.area} | Skor: ${record.score}% | Temuan: ${noItems.size}")
-                                    }
-                                    val sendIntent = Intent().apply {
-                                        action = Intent.ACTION_SEND
-                                        putExtra(Intent.EXTRA_TEXT, summary)
-                                        type = "text/plain"
-                                    }
-                                    context.startActivity(Intent.createChooser(sendIntent, "Bagikan Laporan"))
-                                },
+                            FilledTonalButton(
+                                onClick = onExportPdf,
                                 modifier = Modifier.weight(1f),
                                 shape = RoundedCornerShape(14.dp)
                             ) {
-                                Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Icon(Icons.Default.PictureAsPdf, contentDescription = null, modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text(if (language == AppLanguage.ID) "Bagikan" else "Share")
+                                Text(
+                                    text = AppStrings.get("export_pdf_btn", language),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    fontWeight = FontWeight.SemiBold
+                                )
                             }
 
                             Button(

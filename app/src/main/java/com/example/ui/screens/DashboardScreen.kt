@@ -42,6 +42,10 @@ fun DashboardScreen(
     area: String,
     activeAnswers: Map<String, AnswerData>,
     historyRecords: List<InspectionRecord>,
+    dashboardMetrics: DashboardMetrics,
+    pendingSyncCount: Int,
+    dashboardPerspective: DashboardPerspective,
+    onPerspectiveChanged: (DashboardPerspective) -> Unit,
     findings: List<FindingItem>,
     currentUser: UserProfile?,
     activeProject: FirestoreProject? = null,
@@ -50,8 +54,8 @@ fun DashboardScreen(
     availableCategories: List<String>,
     onToggleCategory: (String) -> Unit,
     onSelectAllCategories: () -> Unit,
-    onLanguageToggle: () -> Unit,
     onOpenAuthDialog: () -> Unit,
+    onOpenProfileSettings: () -> Unit,
     onInspectorDetailsChanged: (name: String, loc: String) -> Unit,
     onStartClicked: () -> Unit,
     onResetDraftClicked: () -> Unit,
@@ -66,14 +70,44 @@ fun DashboardScreen(
     }
     val hasActiveDraft = answeredCount > 0
 
-    val openFindingsCount = remember(findings) {
-        findings.count { it.status.equals("OPEN", ignoreCase = true) }
+    val userEmail = currentUser?.email ?: ""
+    val scopedFindings = remember(findings, dashboardPerspective, userEmail, inspectorName) {
+        when (dashboardPerspective) {
+            DashboardPerspective.ALL -> findings
+            DashboardPerspective.PIC_TASKS -> findings.filter { f ->
+                !f.status.equals("CLOSED", ignoreCase = true) && (
+                    (userEmail.isNotBlank() && f.assignedPicEmail.equals(userEmail, ignoreCase = true)) ||
+                    (inspectorName.isNotBlank() && f.assignedPicName.equals(inspectorName, ignoreCase = true))
+                )
+            }
+            DashboardPerspective.INSPECTOR_VERIFY -> findings.filter { f ->
+                f.status.equals("ACTION_SUBMITTED", ignoreCase = true) ||
+                    f.status.equals("IN_REVIEW", ignoreCase = true)
+            }
+            DashboardPerspective.HIGH_RISK -> findings.filter { f ->
+                !f.status.equals("CLOSED", ignoreCase = true) && (f.isCritical || f.isOverdue())
+            }
+        }
     }
-    val criticalRiskCount = remember(findings) {
-        findings.count { it.isCritical && !it.status.equals("CLOSED", ignoreCase = true) }
+
+    val openFindingsCount = remember(scopedFindings) {
+        scopedFindings.count { !it.status.equals("CLOSED", ignoreCase = true) }
     }
-    val avgScore = remember(historyRecords) {
-        if (historyRecords.isNotEmpty()) historyRecords.map { it.score }.average().toInt() else 100
+    val criticalRiskCount = remember(scopedFindings) {
+        scopedFindings.count { (it.isCritical || it.isOverdue()) && !it.status.equals("CLOSED", ignoreCase = true) }
+    }
+    val overdueCount = remember(findings) {
+        findings.count { it.isOverdue() }
+    }
+    val avgScore = if (dashboardMetrics.totalAudits > 0) dashboardMetrics.avgScore else 100
+    val totalAuditsCount = if (dashboardMetrics.totalAudits > 0) dashboardMetrics.totalAudits else historyRecords.size
+
+    val topRecurringCategories = remember(findings) {
+        findings.groupBy { it.category }
+            .mapValues { it.value.size }
+            .entries
+            .sortedByDescending { it.value }
+            .take(3)
     }
 
     val categories = remember(checklistItems) {
@@ -99,74 +133,70 @@ fun DashboardScreen(
             .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // App Top Bar / Header with Safety Radar Beacon
+        // App Top Bar / Header (Clean, zero overlap)
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Row(
+                modifier = Modifier.weight(1f),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                HseBrandLogo(size = 44.dp)
-                Column {
+                HseBrandLogo(size = 40.dp)
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = AppStrings.get("app_title", language),
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.ExtraBold,
-                        color = MaterialTheme.colorScheme.onSurface
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                     Text(
                         text = AppStrings.get("app_subtitle", language),
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
             }
 
-            // Right action buttons (Language & Firebase Auth)
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                // Firebase Auth Quick Access
-                Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = if (currentUser != null) SafetyTeal.copy(alpha = 0.15f) else SafetyBlue.copy(alpha = 0.12f),
-                    border = BorderStroke(1.dp, if (currentUser != null) SafetyTeal.copy(alpha = 0.4f) else SafetyBlue.copy(alpha = 0.3f)),
-                    modifier = Modifier.clickable { onOpenAuthDialog() }
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
-                    ) {
-                        Icon(
-                            imageVector = if (currentUser != null) Icons.Default.AccountCircle else Icons.Default.Login,
-                            contentDescription = "Auth",
-                            tint = if (currentUser != null) SafetyTeal else SafetyBlue,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Text(
-                            text = if (currentUser != null) currentUser.displayName.take(8) else "Masuk",
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = if (currentUser != null) SafetyTeal else SafetyBlue
-                        )
+            // Single Compact Account Pill (Opens Profile Settings or Auth Dialog)
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = if (currentUser != null) SafetyTeal.copy(alpha = 0.12f) else SafetyBlue.copy(alpha = 0.12f),
+                border = BorderStroke(
+                    1.dp,
+                    if (currentUser != null) SafetyTeal.copy(alpha = 0.35f) else SafetyBlue.copy(alpha = 0.3f)
+                ),
+                modifier = Modifier
+                    .widthIn(max = 136.dp)
+                    .clickable {
+                        if (currentUser != null) onOpenProfileSettings() else onOpenAuthDialog()
                     }
-                }
-
-                // Language Switcher Chip
-                FilledTonalButton(
-                    onClick = onLanguageToggle,
-                    shape = RoundedCornerShape(12.dp),
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)
                 ) {
+                    Icon(
+                        imageVector = if (currentUser != null) Icons.Default.AccountCircle else Icons.Default.Login,
+                        contentDescription = "Account",
+                        tint = if (currentUser != null) SafetyTeal else SafetyBlue,
+                        modifier = Modifier.size(18.dp)
+                    )
                     Text(
-                        text = "${language.flag} ${language.code.uppercase()}",
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Bold
+                        text = currentUser?.displayName?.ifBlank { currentUser.email.substringBefore("@") }
+                            ?: if (language == AppLanguage.ID) "Masuk" else "Sign In",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = if (currentUser != null) SafetyTeal else SafetyBlue,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
             }
@@ -205,12 +235,32 @@ fun DashboardScreen(
                     )
                 }
 
-                Text(
-                    text = "${checklistItems.size} RULES",
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Black,
-                    color = SafetyBlue
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    if (pendingSyncCount > 0) {
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = AmberGold.copy(alpha = 0.18f),
+                            modifier = Modifier.clickable { onNavigateToTab(AppNavTab.FEED) }
+                        ) {
+                            Text(
+                                text = "⏳ $pendingSyncCount",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = AmberGold,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                    Text(
+                        text = "${checklistItems.size} RULES",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Black,
+                        color = SafetyBlue
+                    )
+                }
             }
         }
 
@@ -265,7 +315,10 @@ fun DashboardScreen(
                         )
                         if (activeProject != null) {
                             Text(
-                                text = "👥 ${activeProject.memberUids.size} Personil • 📍 ${activeProject.customLocations.size} Lokasi",
+                                text = if (language == AppLanguage.ID)
+                                    "👥 ${activeProject.memberUids.size} Personil • 📍 ${activeProject.customLocations.size} Lokasi"
+                                else
+                                    "👥 ${activeProject.memberUids.size} Personnel • 📍 ${activeProject.customLocations.size} Locations",
                                 fontSize = 10.sp,
                                 color = SafetyTeal
                             )
@@ -387,13 +440,39 @@ fun DashboardScreen(
                             Icon(Icons.Default.History, contentDescription = null, modifier = Modifier.size(14.dp))
                             Spacer(modifier = Modifier.width(4.dp))
                             Text(
-                                text = "${AppStrings.get("tab_feed", language)} (${historyRecords.size})",
+                                text = "${AppStrings.get("tab_feed", language)} ($totalAuditsCount)",
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold
                             )
                         }
                     }
                 }
+            }
+        }
+
+        // Role-Based Perspective Switcher
+        LazyRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            items(DashboardPerspective.entries) { perspective ->
+                val isSelected = perspective == dashboardPerspective
+                FilterChip(
+                    selected = isSelected,
+                    onClick = { onPerspectiveChanged(perspective) },
+                    label = {
+                        Text(
+                            text = if (language == AppLanguage.ID) perspective.titleId else perspective.titleEn,
+                            fontSize = 11.sp,
+                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                        )
+                    },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = SafetyBlue.copy(alpha = 0.16f),
+                        selectedLabelColor = SafetyBlue
+                    ),
+                    shape = RoundedCornerShape(10.dp)
+                )
             }
         }
 
@@ -404,7 +483,7 @@ fun DashboardScreen(
         ) {
             DashboardKpiCard(
                 title = AppStrings.get("kpi_total_audits", language),
-                value = "${historyRecords.size}",
+                value = "$totalAuditsCount",
                 icon = Icons.Default.Assessment,
                 color = SafetyBlue,
                 onClick = { onNavigateToTab(AppNavTab.FEED) },
@@ -413,7 +492,7 @@ fun DashboardScreen(
 
             DashboardKpiCard(
                 title = AppStrings.get("kpi_avg_score", language),
-                value = if (historyRecords.isNotEmpty()) "$avgScore%" else "100%",
+                value = if (totalAuditsCount > 0) "$avgScore%" else "100%",
                 icon = Icons.Default.VerifiedUser,
                 color = if (avgScore >= 90) SafetyTeal else AmberGold,
                 onClick = { onNavigateToTab(AppNavTab.FEED) },
@@ -435,13 +514,112 @@ fun DashboardScreen(
             )
 
             DashboardKpiCard(
-                title = AppStrings.get("kpi_critical_alerts", language),
-                value = "$criticalRiskCount",
+                title = if (overdueCount > 0) AppStrings.get("sla_overdue", language) else AppStrings.get("kpi_critical_alerts", language),
+                value = if (overdueCount > 0) "$overdueCount" else "$criticalRiskCount",
                 icon = Icons.Default.Shield,
-                color = if (criticalRiskCount > 0) CriticalOrange else SafetyTeal,
+                color = if (overdueCount > 0 || criticalRiskCount > 0) CriticalOrange else SafetyTeal,
                 onClick = { onNavigateToTab(AppNavTab.FINDINGS) },
                 modifier = Modifier.weight(1f)
             )
+        }
+
+        // Enterprise Trend & Top Recurring Violations Card (shown when data exists)
+        if (historyRecords.isNotEmpty() || topRecurringCategories.isNotEmpty()) {
+            Card(
+                shape = RoundedCornerShape(18.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = if (language == AppLanguage.ID) "Tren Kepatuhan & Top Deviasi LSR" else "Compliance Trend & Top LSR Deviations",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = if (language == AppLanguage.ID) "${historyRecords.take(7).size} Audit Terakhir" else "Last ${historyRecords.take(7).size} Audits",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    if (historyRecords.isNotEmpty()) {
+                        val recent = historyRecords.take(7).reversed()
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(48.dp),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.Bottom
+                        ) {
+                            recent.forEach { rec ->
+                                val barFraction = (rec.score / 100f).coerceIn(0.15f, 1f)
+                                val barColor = if (rec.score >= 85) SafetyTeal else if (rec.score >= 60) AmberGold else DangerRed
+                                Column(
+                                    modifier = Modifier.weight(1f),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.Bottom
+                                ) {
+                                    Text(
+                                        text = "${rec.score}%",
+                                        fontSize = 8.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = barColor
+                                    )
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height((30 * barFraction).dp)
+                                            .clip(RoundedCornerShape(topStart = 4.dp, topEnd = 4.dp))
+                                            .background(barColor.copy(alpha = 0.85f))
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    if (topRecurringCategories.isNotEmpty()) {
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+                        topRecurringCategories.forEach { (cat, count) ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "${LsrChecklist.getCategoryIcon(cat)} $cat",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Surface(
+                                    shape = RoundedCornerShape(6.dp),
+                                    color = DangerRed.copy(alpha = 0.12f)
+                                ) {
+                                    Text(
+                                        text = "$count ${if (language == AppLanguage.ID) "temuan" else "findings"}",
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = DangerRed,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         // Inspector & Area Setup Card
@@ -721,7 +899,7 @@ fun DashboardScreen(
                     color = MaterialTheme.colorScheme.onSurface
                 )
                 Text(
-                    text = "${categories.size} Kategori",
+                    text = if (language == AppLanguage.ID) "${categories.size} Kategori" else "${categories.size} Categories",
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontWeight = FontWeight.Medium

@@ -1,0 +1,197 @@
+rules_version = '2';
+
+// ===============================================================
+// Assumed Data Model (HSE LSR Inspector - lowerzakum-482af)
+// ===============================================================
+//
+// Collection: users/{userId}
+// Fields:
+//   - uid: string (required, matches auth.uid)
+//   - displayName: string (required, 1..100)
+//   - displayNameLowercase: string (optional, 0..100)
+//   - email: string (required, valid email format)
+//   - company: string (optional, 0..120)
+//   - position: string (optional, 0..120)
+//   - photoURL: string (optional, http/https url)
+//   - aiEnabled: bool (optional, immutable by self)
+//   - projectIds: list (optional, max 50 string ids)
+//   - fcmToken: string (optional, 0..512)
+//   - updatedAt: number (optional)
+//
+// Collection: projects/{projectId}
+// Fields:
+//   - id, name, code, createdAt, ownerUid (immutable), isOpen (bool),
+//     memberUids (list), customCompanies, customLocations,
+//     customObservationCategories, roles (map), totalFindings, openFindings, closedFindings
+//
+// Subcollection: projects/{projectId}/findings/{findingId}
+// Fields:
+//   - id, projectId, checklistCategory, questionText, description, location,
+//     severity, status, creatorUid, creatorName, creatorEmail, creatorRole, creatorCompany,
+//     picUid, picName, picEmail, picRole, picCompany, picPhotoURL,
+//     evidencePhotos, proofPhotos, actionTaken, actionSubmittedTimestamp, actionSubmittedByUid,
+//     verifiedTimestamp, verifiedByUid, verificationRemarks, picRating,
+//     targetCompletionTimestamp, createdAt, updatedAt
+//
+// Subcollection: projects/{projectId}/findings/{findingId}/action_logs/{logId}
+// Fields:
+//   - id, findingId, projectId, timestamp, actorUid, actorName, actorRole,
+//     actionType, oldStatus, newStatus, remarks, rating
+//
+// Subcollection: projects/{projectId}/notifications/{notificationId}
+// Fields:
+//   - id, projectId, projectName, findingId, recipientUid, recipientEmail,
+//     senderUid, senderName, senderEmail, title, message, type,
+//     isCritical, isBroadcast, isRead, timestamp
+// ===============================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isValidEmail(email) {
+      return email is string &&
+        email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    function isValidString(val, minLen, maxLen) {
+      return val is string && val.size() >= minLen && val.size() <= maxLen;
+    }
+
+    function isProjectMember(projectId) {
+      let projDoc = get(/databases/$(database)/documents/projects/$(projectId));
+      return isAuthenticated() && projDoc.exists() && (
+        projDoc.data.isOpen == true ||
+        projDoc.data.ownerUid == request.auth.uid ||
+        (projDoc.data.memberUids is list && request.auth.uid in projDoc.data.memberUids)
+      );
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+    function isValidUserWrite(userId) {
+      let data = request.resource.data;
+      return data.keys().hasOnly([
+          'uid', 'displayName', 'displayNameLowercase', 'email',
+          'company', 'position', 'photoURL', 'aiEnabled',
+          'projectIds', 'fcmToken', 'searchKeywords', 'updatedAt'
+        ]) &&
+        (!('uid' in data) || data.uid == userId) &&
+        (!('displayName' in data) || isValidString(data.displayName, 1, 100)) &&
+        (!('email' in data) || isValidEmail(data.email)) &&
+        (!('company' in data) || isValidString(data.company, 0, 120)) &&
+        (!('position' in data) || isValidString(data.position, 0, 120)) &&
+        (!('fcmToken' in data) || isValidString(data.fcmToken, 0, 512)) &&
+        (!('projectIds' in data) || (data.projectIds is list && data.projectIds.size() <= 50));
+    }
+
+    function isValidFindingWrite(projectId) {
+      let data = request.resource.data;
+      return data.keys().hasOnly([
+          'id', 'projectId', 'checklistCategory', 'questionText', 'description', 'location',
+          'severity', 'status', 'creatorUid', 'creatorName', 'creatorEmail', 'creatorRole',
+          'creatorCompany', 'picUid', 'picName', 'picEmail', 'picRole', 'picCompany', 'picPhotoURL',
+          'evidencePhotos', 'targetCompletionTimestamp', 'actionTaken', 'proofPhotos',
+          'actionSubmittedTimestamp', 'actionSubmittedByUid', 'verifiedTimestamp',
+          'verifiedByUid', 'verificationRemarks', 'picRating', 'createdAt', 'updatedAt'
+        ]) &&
+        (!('projectId' in data) || data.projectId == projectId) &&
+        (!('status' in data) || data.status in ['OPEN', 'IN_PROGRESS', 'ACTION_SUBMITTED', 'IN_REVIEW', 'CLOSED', 'REJECTED', 'REOPENED']) &&
+        (!('severity' in data) || data.severity in ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']) &&
+        (!('description' in data) || isValidString(data.description, 0, 2000)) &&
+        (!('actionTaken' in data) || isValidString(data.actionTaken, 0, 2000)) &&
+        (!('verificationRemarks' in data) || isValidString(data.verificationRemarks, 0, 2000)) &&
+        (!('picRating' in data) || (data.picRating is number && data.picRating >= 0 && data.picRating <= 5));
+    }
+
+    function isValidActionLogCreate(projectId, findingId) {
+      let data = request.resource.data;
+      return data.keys().hasOnly([
+          'id', 'findingId', 'projectId', 'timestamp', 'actorUid',
+          'actorName', 'actorRole', 'actionType', 'oldStatus', 'newStatus', 'remarks', 'rating'
+        ]) &&
+        (!('projectId' in data) || data.projectId == projectId) &&
+        (!('findingId' in data) || data.findingId == findingId) &&
+        (!('remarks' in data) || isValidString(data.remarks, 0, 2000)) &&
+        (!('actorName' in data) || isValidString(data.actorName, 0, 120));
+    }
+
+    function isValidNotificationWrite(projectId) {
+      let data = request.resource.data;
+      return data.keys().hasOnly([
+          'id', 'projectId', 'projectName', 'findingId', 'recipientUid', 'recipientEmail',
+          'senderUid', 'senderName', 'senderEmail', 'title', 'message', 'type',
+          'isCritical', 'isBroadcast', 'isRead', 'timestamp'
+        ]) &&
+        (!('projectId' in data) || data.projectId == projectId) &&
+        (!('title' in data) || isValidString(data.title, 1, 200)) &&
+        (!('message' in data) || isValidString(data.message, 1, 2000)) &&
+        (!('isRead' in data) || data.isRead is bool);
+    }
+
+    // ===============================================================
+    // Rules Matchers
+    // ===============================================================
+
+    // Users: authenticated workspace members can view team roster, only owner writes own profile
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow create: if isOwner(userId) && isValidUserWrite(userId) &&
+        (!('aiEnabled' in request.resource.data) || request.resource.data.aiEnabled == false);
+      allow update: if isOwner(userId) && isValidUserWrite(userId) &&
+        (!('aiEnabled' in request.resource.data) || request.resource.data.aiEnabled == resource.data.aiEnabled);
+      allow delete: if false;
+    }
+
+    // Projects: members can read, owner or members can update metadata (ownerUid immutable)
+    match /projects/{projectId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() &&
+        request.resource.data.ownerUid == request.auth.uid &&
+        isValidString(request.resource.data.name, 1, 150);
+      allow update: if isAuthenticated() && (
+        resource.data.ownerUid == request.auth.uid ||
+        (resource.data.memberUids is list && request.auth.uid in resource.data.memberUids)
+      ) && request.resource.data.ownerUid == resource.data.ownerUid;
+      allow delete: if isAuthenticated() && resource.data.ownerUid == request.auth.uid;
+
+      // Scoped Findings
+      match /findings/{findingId} {
+        allow read: if isProjectMember(projectId);
+        allow create: if isProjectMember(projectId) && isValidFindingWrite(projectId);
+        allow update: if isProjectMember(projectId) && isValidFindingWrite(projectId) &&
+          (!('createdAt' in resource.data) || request.resource.data.createdAt == resource.data.createdAt);
+        allow delete: if isAuthenticated() &&
+          get(/databases/$(database)/documents/projects/$(projectId)).data.ownerUid == request.auth.uid;
+
+        // Immutable Audit Trail & Direct Comments
+        match /action_logs/{logId} {
+          allow read: if isProjectMember(projectId);
+          allow create: if isProjectMember(projectId) && isValidActionLogCreate(projectId, findingId);
+          allow update, delete: if false;
+        }
+      }
+
+      // Cross-User Push & Reminder Notifications
+      match /notifications/{notificationId} {
+        allow read: if isProjectMember(projectId);
+        allow create: if isProjectMember(projectId) && isValidNotificationWrite(projectId);
+        allow update: if isProjectMember(projectId) &&
+          isValidNotificationWrite(projectId) &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isRead']);
+        allow delete: if false;
+      }
+    }
+  }
+}

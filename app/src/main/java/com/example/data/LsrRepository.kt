@@ -7,6 +7,7 @@ import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.SetOptions
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -22,10 +23,27 @@ class LsrRepository(private val lsrDao: LsrDao) {
 
     val activeAnswersFlow: Flow<List<ActiveAnswer>> = lsrDao.getActiveAnswersFlow()
     val inspectionRecordsFlow: Flow<List<InspectionRecord>> = lsrDao.getInspectionRecordsFlow()
+    val totalInspectionCountFlow: Flow<Int> = lsrDao.getTotalInspectionCountFlow()
+    val dashboardMetricsFlow: Flow<DashboardMetrics> = lsrDao.getDashboardMetricsFlow()
     val findingsFlow: Flow<List<FindingItem>> = lsrDao.getFindingsFlow()
     val notificationsFlow: Flow<List<AppNotification>> = lsrDao.getNotificationsFlow()
+    val totalNotificationsCountFlow: Flow<Int> = lsrDao.getTotalNotificationsCountFlow()
     val unreadNotificationsCountFlow: Flow<Int> = lsrDao.getUnreadNotificationsCountFlow()
     val allActionLogsFlow: Flow<List<ActionHistoryLog>> = lsrDao.getAllActionLogsFlow()
+
+    val pendingSyncCountFlow: Flow<Int> = combine(
+        lsrDao.getPendingSyncRecordsCountFlow(),
+        lsrDao.getPendingSyncFindingsCountFlow()
+    ) { recCount, findCount -> recCount + findCount }
+
+    fun getInspectionSummariesFlow(limit: Int): Flow<List<InspectionSummary>> =
+        lsrDao.getInspectionSummariesFlow(limit)
+
+    fun getNotificationsWindowFlow(limit: Int): Flow<List<AppNotification>> =
+        lsrDao.getNotificationsWindowFlow(limit)
+
+    suspend fun getInspectionRecordById(id: Int): InspectionRecord? =
+        withContext(Dispatchers.IO) { lsrDao.getInspectionRecordById(id) }
 
     fun getActionLogsFlow(findingId: Int): Flow<List<ActionHistoryLog>> = lsrDao.getActionLogsFlow(findingId)
 
@@ -388,6 +406,160 @@ class LsrRepository(private val lsrDao: LsrDao) {
         }
     }
 
+    suspend fun deleteReadNotifications() {
+        withContext(Dispatchers.IO) {
+            lsrDao.deleteReadNotifications()
+        }
+    }
+
+    suspend fun purgeOldReadNotifications(days: Int = 30) {
+        withContext(Dispatchers.IO) {
+            val cutoff = System.currentTimeMillis() - (days.toLong() * 86_400_000L)
+            lsrDao.purgeOldReadNotifications(cutoff)
+        }
+    }
+
+    suspend fun attachFindingEvidencePhoto(findingId: Int, localPath: String, remoteUrl: String = "") {
+        withContext(Dispatchers.IO) {
+            lsrDao.updateFindingEvidencePhoto(findingId, localPath, remoteUrl)
+        }
+    }
+
+    suspend fun sendFindingCommentOrReminder(
+        findingId: Int,
+        actorUid: String,
+        actorName: String,
+        actorEmail: String,
+        actorRole: String,
+        message: String,
+        isReminder: Boolean,
+        projectId: String
+    ): Pair<FirestoreActionLog, FirestoreNotification>? = withContext(Dispatchers.IO) {
+        val existing = lsrDao.getFindingById(findingId) ?: return@withContext null
+        val now = System.currentTimeMillis()
+        val actionType = if (isReminder) "REMINDER_PING" else "COMMENT"
+        val cleanMsg = message.trim().ifBlank {
+            if (isReminder) "Mohon segera tindak lanjuti temuan ${existing.ruleId} di ${existing.area}."
+            else ""
+        }
+        if (cleanMsg.isBlank()) return@withContext null
+
+        // Persist locally immediately
+        lsrDao.insertActionLog(
+            ActionHistoryLog(
+                findingId = findingId,
+                ruleId = existing.ruleId,
+                actorName = actorName,
+                actorEmail = actorEmail,
+                actorRole = actorRole,
+                actionType = actionType,
+                oldStatus = existing.status,
+                newStatus = existing.status,
+                notes = cleanMsg,
+                timestamp = now
+            )
+        )
+
+        // Determine recipient (if sender is PIC -> notify Inspector, otherwise notify PIC)
+        val senderIsPic = actorEmail.isNotBlank() && actorEmail.equals(existing.assignedPicEmail, ignoreCase = true)
+        val recipientEmail = if (senderIsPic) existing.inspectorEmail else existing.assignedPicEmail
+        val recipientName = if (senderIsPic) existing.inspectorName else existing.assignedPicName
+
+        val notifTitle = if (isReminder) {
+            "🔔 Pengingat Temuan: ${existing.ruleId}"
+        } else {
+            "💬 Pesan Baru ($actorName) • ${existing.ruleId}"
+        }
+        val notifType = if (isReminder) "REMINDER" else "CHAT_MESSAGE"
+
+        // Save local echo so sender also sees activity if needed
+        lsrDao.insertNotification(
+            AppNotification(
+                recipientEmail = recipientEmail,
+                recipientName = recipientName,
+                title = notifTitle,
+                message = cleanMsg,
+                type = notifType,
+                findingId = findingId,
+                ruleId = existing.ruleId,
+                timestamp = now,
+                isRead = true,
+                isSynced = true,
+                senderName = actorName
+            )
+        )
+
+        val logDoc = FirestoreActionLog(
+            id = "log_${now}_${(100..999).random()}",
+            findingId = "finding_$findingId",
+            projectId = projectId,
+            timestamp = now,
+            actorUid = actorUid,
+            actorName = actorName,
+            actorRole = actorRole,
+            actionType = actionType,
+            oldStatus = existing.status,
+            newStatus = existing.status,
+            remarks = cleanMsg
+        )
+
+        val notifDoc = FirestoreNotification(
+            id = "notif_${now}_${(100..999).random()}",
+            projectId = projectId,
+            findingId = findingId.toString(),
+            recipientEmail = recipientEmail,
+            senderUid = actorUid,
+            senderName = actorName,
+            senderEmail = actorEmail,
+            title = notifTitle,
+            message = cleanMsg,
+            type = notifType,
+            isCritical = isReminder && existing.isCritical,
+            isBroadcast = recipientEmail.isBlank(),
+            isRead = false,
+            timestamp = now
+        )
+        Pair(logDoc, notifDoc)
+    }
+
+    suspend fun ingestRemoteNotifications(
+        remoteList: List<FirestoreNotification>,
+        currentUserUid: String,
+        notifPicAlerts: Boolean,
+        notifCriticalAlerts: Boolean
+    ): List<FirestoreNotification> = withContext(Dispatchers.IO) {
+        val newlyArrived = mutableListOf<FirestoreNotification>()
+        remoteList.forEach { remote ->
+            if (remote.id.isBlank()) return@forEach
+            val alreadyExists = lsrDao.getNotificationByRemoteId(remote.id) != null
+            if (!alreadyExists) {
+                val isFromSelf = currentUserUid.isNotBlank() && remote.senderUid == currentUserUid
+                val fId = remote.findingId.removePrefix("finding_").toIntOrNull() ?: 0
+                lsrDao.insertNotification(
+                    AppNotification(
+                        recipientEmail = remote.recipientEmail,
+                        recipientName = remote.senderName,
+                        title = remote.title,
+                        message = remote.message,
+                        type = remote.type,
+                        findingId = fId,
+                        ruleId = "",
+                        timestamp = remote.timestamp,
+                        isRead = isFromSelf || remote.isRead,
+                        isSynced = true,
+                        remoteId = remote.id,
+                        senderName = remote.senderName
+                    )
+                )
+                val allowedByPref = if (remote.isCritical) notifCriticalAlerts else notifPicAlerts
+                if (!isFromSelf && !remote.isRead && allowedByPref) {
+                    newlyArrived.add(remote)
+                }
+            }
+        }
+        newlyArrived
+    }
+
     suspend fun clearNotifications() {
         withContext(Dispatchers.IO) {
             lsrDao.clearNotifications()
@@ -415,10 +587,14 @@ class LsrRepository(private val lsrDao: LsrDao) {
         applicableModules: List<String> = emptyList(),
         scriptUrl: String,
         isGasSyncEnabled: Boolean = true,
-        firebaseUrl: String = "https://hssetech-e1710-default-rtdb.asia-southeast1.firebasedatabase.app",
+        firebaseUrl: String = "https://lowerzakum-482af-default-rtdb.firebaseio.com",
         isFirebaseSyncEnabled: Boolean = true,
         userUid: String = "",
-        userEmail: String = ""
+        userEmail: String = "",
+        projectId: String = "",
+        company: String = "",
+        notifPicAlerts: Boolean = true,
+        notifCriticalAlerts: Boolean = true
     ): Result<Unit> {
         return withContext(Dispatchers.IO) {
             try {
@@ -436,6 +612,11 @@ class LsrRepository(private val lsrDao: LsrDao) {
                 val now = System.currentTimeMillis()
                 val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
                 val formattedDate = dateFormat.format(Date(now))
+
+                val questionMap = checklistItems.associateBy { it.id }
+                val resolvedCategories = applicableModules.ifEmpty {
+                    answeredItems.mapNotNull { questionMap[it.questionId]?.category }.distinct()
+                }.joinToString(", ")
 
                 // Construct Answers & Metadata JSON mapping for local DB
                 val localRootJson = JSONObject()
@@ -459,13 +640,16 @@ class LsrRepository(private val lsrDao: LsrDao) {
                     timestamp = now,
                     answersJson = localRootJson.toString(),
                     score = score,
-                    isSynced = false
+                    isSynced = false,
+                    projectId = projectId,
+                    company = company,
+                    lsrCategories = resolvedCategories
                 )
                 val recordId = lsrDao.insertInspectionRecord(record).toInt()
 
                 // Extract all Non-Compliant ("NO") items as dedicated Findings
-                val questionMap = checklistItems.associateBy { it.id }
                 val newFindings = mutableListOf<FindingItem>()
+                val initialLogs = mutableListOf<ActionHistoryLog>()
 
                 activeAnswers.filter { it.answer == "NO" }.forEach { ans ->
                     val q = questionMap[ans.questionId]
@@ -499,61 +683,75 @@ class LsrRepository(private val lsrDao: LsrDao) {
                         correctiveAction = "",
                         status = "OPEN",
                         timestamp = now,
-                        isSynced = false
+                        isSynced = false,
+                        projectId = projectId,
+                        company = company
                     )
-                    newFindings.add(finding)
-                }
+                    val insertedFindingId = lsrDao.insertFinding(finding).toInt()
+                    val persistedFinding = finding.copy(id = insertedFindingId)
+                    newFindings.add(persistedFinding)
 
-                if (newFindings.isNotEmpty()) {
-                    lsrDao.insertFindings(newFindings)
-
-                    // Also generate Action History Logs & Notifications for each finding
-                    val initialLogs = mutableListOf<ActionHistoryLog>()
-                    newFindings.forEach { finding ->
+                    initialLogs.add(
+                        ActionHistoryLog(
+                            findingId = insertedFindingId,
+                            ruleId = ruleId,
+                            actorName = inspectorName,
+                            actorEmail = userEmail,
+                            actorRole = "Inspector / Auditor",
+                            actionType = "CREATED_NON_COMPLIANT",
+                            oldStatus = "",
+                            newStatus = "OPEN",
+                            notes = "Temuan ketidakpatuhan dicatat saat audit lapangan. Catatan: ${ans.notes.ifBlank { "Kondisi tidak memenuhi standar LSR." }}",
+                            timestamp = now
+                        )
+                    )
+                    if (isCritical && notifCriticalAlerts) {
+                        lsrDao.insertNotification(
+                            AppNotification(
+                                recipientEmail = userEmail,
+                                recipientName = inspectorName,
+                                title = "🚨 Temuan Kritis LSR: $ruleId",
+                                message = "Pelanggaran risiko fatal terdeteksi di $area: $itemText",
+                                type = "CRITICAL",
+                                findingId = insertedFindingId,
+                                ruleId = ruleId,
+                                timestamp = now,
+                                senderName = inspectorName
+                            )
+                        )
+                    }
+                    if (notifPicAlerts && hasAssignedPic && picName != "Unassigned / HSE Field Team") {
                         initialLogs.add(
                             ActionHistoryLog(
-                                findingId = finding.id,
-                                ruleId = finding.ruleId,
+                                findingId = insertedFindingId,
+                                ruleId = ruleId,
                                 actorName = inspectorName,
                                 actorEmail = userEmail,
                                 actorRole = "Inspector / Auditor",
-                                actionType = "CREATED_NON_COMPLIANT",
-                                oldStatus = "",
+                                actionType = "ASSIGNED_TO_PIC",
+                                oldStatus = "OPEN",
                                 newStatus = "OPEN",
-                                notes = "Temuan ketidakpatuhan dicatat saat audit lapangan. Catatan: ${finding.notes.ifBlank { "Kondisi tidak memenuhi standar LSR." }}",
+                                notes = "Ditugaskan kepada PIC: $picName ($picRole)",
                                 timestamp = now
                             )
                         )
-                        if (finding.assignedPicName.isNotBlank() && finding.assignedPicName != "Unassigned / HSE Field Team") {
-                            initialLogs.add(
-                                ActionHistoryLog(
-                                    findingId = finding.id,
-                                    ruleId = finding.ruleId,
-                                    actorName = inspectorName,
-                                    actorEmail = userEmail,
-                                    actorRole = "Inspector / Auditor",
-                                    actionType = "ASSIGNED_TO_PIC",
-                                    oldStatus = "OPEN",
-                                    newStatus = "OPEN",
-                                    notes = "Ditugaskan kepada PIC: ${finding.assignedPicName} (${finding.assignedPicRole})",
-                                    timestamp = now
-                                )
+                        lsrDao.insertNotification(
+                            AppNotification(
+                                recipientEmail = picEmail,
+                                recipientName = picName,
+                                title = "⚠️ Tugas Temuan Baru: $ruleId",
+                                message = "Anda ditugaskan sebagai PIC untuk perbaikan di area $area oleh $inspectorName.",
+                                type = "ASSIGNMENT",
+                                findingId = insertedFindingId,
+                                ruleId = ruleId,
+                                timestamp = now,
+                                senderName = inspectorName
                             )
-                            // Notification for PIC
-                            lsrDao.insertNotification(
-                                AppNotification(
-                                    recipientEmail = finding.assignedPicEmail,
-                                    recipientName = finding.assignedPicName,
-                                    title = "⚠️ Tugas Temuan Baru: ${finding.ruleId}",
-                                    message = "Anda ditugaskan sebagai PIC untuk perbaikan di area $area oleh $inspectorName.",
-                                    type = "ASSIGNMENT",
-                                    findingId = finding.id,
-                                    ruleId = finding.ruleId,
-                                    timestamp = now
-                                )
-                            )
-                        }
+                        )
                     }
+                }
+
+                if (initialLogs.isNotEmpty()) {
                     lsrDao.insertActionLogs(initialLogs)
                 }
 
@@ -760,7 +958,7 @@ class LsrRepository(private val lsrDao: LsrDao) {
                 // Update record sync flag if at least one cloud target succeeded
                 val isOverallSynced = gasSuccess || firebaseSuccess
                 if (isOverallSynced) {
-                    lsrDao.insertInspectionRecord(record.copy(id = recordId, isSynced = true))
+                    lsrDao.markRecordSynced(recordId)
                 }
 
                 // Clear draft answers

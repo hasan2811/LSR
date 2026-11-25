@@ -116,9 +116,14 @@ data class FirestoreNotification(
     val findingId: String = "",
     val recipientUid: String = "",
     val recipientEmail: String = "",
+    val senderUid: String = "",
+    val senderName: String = "",
+    val senderEmail: String = "",
     val title: String = "",
     val message: String = "",
-    val type: String = "ASSIGNMENT", // ASSIGNMENT, ACTION_SUBMITTED, VERIFIED, REJECTED
+    val type: String = "ASSIGNMENT", // ASSIGNMENT, ACTION_SUBMITTED, CLOSED, REOPENED, REMINDER, CHAT_MESSAGE, CRITICAL
+    val isCritical: Boolean = false,
+    val isBroadcast: Boolean = false,
     val isRead: Boolean = false,
     val timestamp: Long = System.currentTimeMillis()
 )

@@ -2,14 +2,22 @@ package com.example.ui
 
 import android.app.Application
 import android.content.Context
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 enum class AppNavTab {
-    DASHBOARD, FEED, FINDINGS, PROFILE
+    DASHBOARD, FEED, FINDINGS, SETTINGS
+}
+
+enum class SettingsSection {
+    HUB, PROFILE, MODULES, CLOUD, NOTIFICATIONS, SUPPORT, ABOUT
 }
 
 class LsrViewModel(application: Application) : AndroidViewModel(application) {
@@ -154,13 +162,44 @@ class LsrViewModel(application: Application) : AndroidViewModel(application) {
     val isGasEnabled: StateFlow<Boolean> = _isGasSyncEnabled.asStateFlow()
 
     private val _firebaseUrl = MutableStateFlow(
-        sharedPrefs.getString("firebase_url", "https://hssetech-e1710-default-rtdb.asia-southeast1.firebasedatabase.app")
-            ?: "https://hssetech-e1710-default-rtdb.asia-southeast1.firebasedatabase.app"
+        sharedPrefs.getString("firebase_url", "https://lowerzakum-482af-default-rtdb.firebaseio.com")
+            ?: "https://lowerzakum-482af-default-rtdb.firebaseio.com"
     )
     val firebaseUrl: StateFlow<String> = _firebaseUrl.asStateFlow()
 
     private val _isFirebaseSyncEnabled = MutableStateFlow(sharedPrefs.getBoolean("is_firebase_sync_enabled", true))
     val isFirebaseEnabled: StateFlow<Boolean> = _isFirebaseSyncEnabled.asStateFlow()
+
+    // Centralized Settings Navigation & Preferences
+    private val _settingsSection = MutableStateFlow(SettingsSection.HUB)
+    val settingsSection: StateFlow<SettingsSection> = _settingsSection.asStateFlow()
+
+    private val _notifPicAlerts = MutableStateFlow(sharedPrefs.getBoolean("notif_pic_alerts", true))
+    val notifPicAlerts: StateFlow<Boolean> = _notifPicAlerts.asStateFlow()
+
+    private val _notifCriticalAlerts = MutableStateFlow(sharedPrefs.getBoolean("notif_critical_alerts", true))
+    val notifCriticalAlerts: StateFlow<Boolean> = _notifCriticalAlerts.asStateFlow()
+
+    private val _notifDraftReminder = MutableStateFlow(sharedPrefs.getBoolean("notif_draft_reminder", true))
+    val notifDraftReminder: StateFlow<Boolean> = _notifDraftReminder.asStateFlow()
+
+    private val _hapticFeedbackEnabled = MutableStateFlow(sharedPrefs.getBoolean("haptic_feedback_enabled", true))
+    val hapticFeedbackEnabled: StateFlow<Boolean> = _hapticFeedbackEnabled.asStateFlow()
+
+    private val _appThemeMode = MutableStateFlow(
+        when (sharedPrefs.getString("app_theme_mode", "SYSTEM")) {
+            "LIGHT" -> AppThemeMode.LIGHT
+            "DARK" -> AppThemeMode.DARK
+            else -> AppThemeMode.SYSTEM
+        }
+    )
+    val appThemeMode: StateFlow<AppThemeMode> = _appThemeMode.asStateFlow()
+
+    private val _feedFilterCriteria = MutableStateFlow(ActivityFilterCriteria())
+    val feedFilterCriteria: StateFlow<ActivityFilterCriteria> = _feedFilterCriteria.asStateFlow()
+
+    private val _findingsFilterCriteria = MutableStateFlow(ActivityFilterCriteria())
+    val findingsFilterCriteria: StateFlow<ActivityFilterCriteria> = _findingsFilterCriteria.asStateFlow()
 
     // Inspection Survey State
     private val _isInspecting = MutableStateFlow(false)
@@ -173,7 +212,22 @@ class LsrViewModel(application: Application) : AndroidViewModel(application) {
     private val _activeAnswers = MutableStateFlow<Map<String, AnswerData>>(emptyMap())
     val activeAnswers: StateFlow<Map<String, AnswerData>> = _activeAnswers.asStateFlow()
 
-    // History logs
+    // Windowed / Paginated Feed & Notifications
+    private val _feedLimit = MutableStateFlow(25)
+    private val _notifLimit = MutableStateFlow(25)
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val feedSummaries: StateFlow<List<InspectionSummary>> = _feedLimit
+        .flatMapLatest { limit -> repository.getInspectionSummariesFlow(limit) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val totalAuditsCount: StateFlow<Int> = repository.totalInspectionCountFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
+
+    val dashboardMetrics: StateFlow<DashboardMetrics> = repository.dashboardMetricsFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), DashboardMetrics())
+
+    // History logs (retained for detail & analytics)
     val historyRecords: StateFlow<List<InspectionRecord>> = repository.inspectionRecordsFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
@@ -181,17 +235,59 @@ class LsrViewModel(application: Application) : AndroidViewModel(application) {
     val findings: StateFlow<List<FindingItem>> = repository.findingsFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    // Notifications & Audit History Logs
+    // Windowed Notifications & Audit History Logs
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val notificationsWindow: StateFlow<List<AppNotification>> = _notifLimit
+        .flatMapLatest { limit -> repository.getNotificationsWindowFlow(limit) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val totalNotificationsCount: StateFlow<Int> = repository.totalNotificationsCountFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
+
     val notifications: StateFlow<List<AppNotification>> = repository.notificationsFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val unreadNotificationsCount: StateFlow<Int> = repository.unreadNotificationsCountFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
 
+    val pendingSyncCount: StateFlow<Int> = repository.pendingSyncCountFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
+
     val allActionLogs: StateFlow<List<ActionHistoryLog>> = repository.allActionLogsFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    fun getActionLogsFlow(findingId: Int): Flow<List<ActionHistoryLog>> = repository.getActionLogsFlow(findingId)
+    fun getActionLogsFlow(findingId: Int): Flow<List<ActionHistoryLog>> {
+        val localFlow = repository.getActionLogsFlow(findingId)
+        val projId = activeProject.value?.id ?: ""
+        if (projId.isBlank()) return localFlow
+
+        val remoteFlow = firestoreManager.observeFindingActionLogs(projId, "finding_$findingId")
+            .catch { emit(emptyList()) }
+
+        return combine(localFlow, remoteFlow) { localLogs, remoteLogs ->
+            val mappedRemote = remoteLogs.map { r ->
+                ActionHistoryLog(
+                    id = 0,
+                    findingId = findingId,
+                    ruleId = "",
+                    actorName = r.actorName,
+                    actorEmail = "",
+                    actorRole = r.actorRole,
+                    actionType = r.actionType,
+                    oldStatus = r.oldStatus,
+                    newStatus = r.newStatus,
+                    notes = r.remarks,
+                    rating = r.rating,
+                    timestamp = r.timestamp,
+                    isSynced = true
+                )
+            }
+            val merged = (localLogs + mappedRemote)
+                .distinctBy { "${it.actionType}|${it.actorName}|${it.notes}|${it.timestamp / 1000L}" }
+                .sortedBy { it.timestamp }
+            merged
+        }
+    }
 
     // UI Status
     private val _uiMessage = MutableSharedFlow<String>()
@@ -200,7 +296,56 @@ class LsrViewModel(application: Application) : AndroidViewModel(application) {
     private val _isSubmitting = MutableStateFlow(false)
     val isSubmitting: StateFlow<Boolean> = _isSubmitting.asStateFlow()
 
+    private val _isRefreshing = MutableStateFlow(false)
+    val isRefreshing: StateFlow<Boolean> = _isRefreshing.asStateFlow()
+
     init {
+        // Retention policy: auto-purge read notifications older than 30 days & schedule background workers
+        viewModelScope.launch {
+            repository.purgeOldReadNotifications(days = 30)
+            SyncScheduler.scheduleDraftReminder(application, _notifDraftReminder.value)
+            SyncScheduler.enqueueImmediateSync(application)
+        }
+
+        // Start cross-user realtime notifications listener when user & active project are ready
+        viewModelScope.launch {
+            combine(currentUser, activeProject) { user, proj -> user to proj }
+                .collect { (user, proj) ->
+                    if (user != null && proj != null && proj.id.isNotBlank()) {
+                        firestoreManager.syncFcmToken(user.uid)
+                        firestoreManager.startScopedNotificationsListener(
+                            projectId = proj.id,
+                            userUid = user.uid,
+                            userEmail = user.email
+                        )
+                    }
+                }
+        }
+
+        // Ingest incoming remote notifications into Room and trigger system push notifications
+        viewModelScope.launch {
+            firestoreManager.remoteNotifications.collect { remoteNotifs ->
+                val uid = currentUser.value?.uid ?: ""
+                if (remoteNotifs.isNotEmpty() && uid.isNotBlank()) {
+                    val fresh = repository.ingestRemoteNotifications(
+                        remoteList = remoteNotifs,
+                        currentUserUid = uid,
+                        notifPicAlerts = _notifPicAlerts.value,
+                        notifCriticalAlerts = _notifCriticalAlerts.value
+                    )
+                    fresh.forEach { n ->
+                        NotificationHelper.showNotification(
+                            context = getApplication(),
+                            notificationId = n.id.hashCode(),
+                            title = n.title,
+                            message = n.message,
+                            isCritical = n.isCritical
+                        )
+                    }
+                }
+            }
+        }
+
         // Load active answers from Room on startup to restore drafts mapped against current checklist
         viewModelScope.launch {
             combine(repository.activeAnswersFlow, checklistItems) { answersList, items ->
@@ -242,13 +387,77 @@ class LsrViewModel(application: Application) : AndroidViewModel(application) {
                     if (user.certification.isNotBlank()) {
                         _inspectorCert.value = user.certification
                     }
+                    viewModelScope.launch {
+                        firestoreManager.syncUserToFirestore(
+                            uid = user.uid,
+                            displayName = user.displayName,
+                            email = user.email,
+                            company = user.company,
+                            position = user.role
+                        )
+                        firestoreManager.ensureDefaultWorkspace(
+                            creatorUid = user.uid,
+                            creatorEmail = user.email,
+                            creatorCompany = user.company
+                        )
+                    }
                 }
             }
         }
     }
 
     fun selectTab(tab: AppNavTab) {
+        if (tab != AppNavTab.SETTINGS) {
+            _settingsSection.value = SettingsSection.HUB
+        }
         _currentTab.value = tab
+    }
+
+    fun openSettingsSection(section: SettingsSection) {
+        _settingsSection.value = section
+        _currentTab.value = AppNavTab.SETTINGS
+    }
+
+    fun setNotifPicAlerts(enabled: Boolean) {
+        _notifPicAlerts.value = enabled
+        sharedPrefs.edit().putBoolean("notif_pic_alerts", enabled).apply()
+    }
+
+    fun setNotifCriticalAlerts(enabled: Boolean) {
+        _notifCriticalAlerts.value = enabled
+        sharedPrefs.edit().putBoolean("notif_critical_alerts", enabled).apply()
+    }
+
+    fun setNotifDraftReminder(enabled: Boolean) {
+        _notifDraftReminder.value = enabled
+        sharedPrefs.edit().putBoolean("notif_draft_reminder", enabled).apply()
+        SyncScheduler.scheduleDraftReminder(getApplication(), enabled)
+    }
+
+    fun setHapticFeedbackEnabled(enabled: Boolean) {
+        _hapticFeedbackEnabled.value = enabled
+        sharedPrefs.edit().putBoolean("haptic_feedback_enabled", enabled).apply()
+    }
+
+    fun setAppThemeMode(mode: AppThemeMode) {
+        _appThemeMode.value = mode
+        sharedPrefs.edit().putString("app_theme_mode", mode.name).apply()
+    }
+
+    fun setFeedFilterCriteria(criteria: ActivityFilterCriteria) {
+        _feedFilterCriteria.value = criteria
+    }
+
+    fun resetFeedFilterCriteria() {
+        _feedFilterCriteria.value = ActivityFilterCriteria()
+    }
+
+    fun setFindingsFilterCriteria(criteria: ActivityFilterCriteria) {
+        _findingsFilterCriteria.value = criteria
+    }
+
+    fun resetFindingsFilterCriteria() {
+        _findingsFilterCriteria.value = ActivityFilterCriteria()
     }
 
     fun setLanguage(language: AppLanguage) {
@@ -282,7 +491,17 @@ class LsrViewModel(application: Application) : AndroidViewModel(application) {
             apply()
         }
         authManager.updateProfileLocal(company, role, cert)
+        val current = currentUser.value
         viewModelScope.launch {
+            if (current != null) {
+                firestoreManager.syncUserToFirestore(
+                    uid = current.uid,
+                    displayName = current.displayName,
+                    email = current.email,
+                    company = company,
+                    position = role
+                )
+            }
             _uiMessage.emit(if (_appLanguage.value == AppLanguage.ID) "Profil berhasil diperbarui." else "Profile updated successfully.")
         }
     }
@@ -296,6 +515,20 @@ class LsrViewModel(application: Application) : AndroidViewModel(application) {
             _isAuthLoading.value = false
             if (result.isSuccess) {
                 val profile = result.getOrNull()
+                if (profile != null) {
+                    firestoreManager.syncUserToFirestore(
+                        uid = profile.uid,
+                        displayName = profile.displayName,
+                        email = profile.email,
+                        company = profile.company,
+                        position = profile.role
+                    )
+                    firestoreManager.ensureDefaultWorkspace(
+                        creatorUid = profile.uid,
+                        creatorEmail = profile.email,
+                        creatorCompany = profile.company
+                    )
+                }
                 val greeting = if (_appLanguage.value == AppLanguage.ID) {
                     "Selamat datang, ${profile?.displayName ?: "Inspektur"}!"
                 } else {
@@ -335,6 +568,20 @@ class LsrViewModel(application: Application) : AndroidViewModel(application) {
             _isAuthLoading.value = false
             if (result.isSuccess) {
                 val profile = result.getOrNull()
+                if (profile != null) {
+                    firestoreManager.syncUserToFirestore(
+                        uid = profile.uid,
+                        displayName = profile.displayName,
+                        email = profile.email,
+                        company = profile.company,
+                        position = profile.role
+                    )
+                    firestoreManager.ensureDefaultWorkspace(
+                        creatorUid = profile.uid,
+                        creatorEmail = profile.email,
+                        creatorCompany = profile.company
+                    )
+                }
                 val msg = if (_appLanguage.value == AppLanguage.ID) {
                     "Akun HSE berhasil dibuat untuk ${profile?.displayName ?: displayName}!"
                 } else {
@@ -664,6 +911,7 @@ class LsrViewModel(application: Application) : AndroidViewModel(application) {
                 FirestoreActionLog(
                     findingId = "finding_$findingId",
                     projectId = projId,
+                    actorUid = user?.uid ?: "",
                     actorName = actor,
                     actorRole = role,
                     actionType = "ASSIGNED_TO_PIC",
@@ -672,12 +920,28 @@ class LsrViewModel(application: Application) : AndroidViewModel(application) {
                     remarks = "Assigned to PIC $picName ($picRole)"
                 )
             )
+            val findingItem = findings.value.find { it.id == findingId }
+            firestoreManager.pushCrossUserNotification(
+                FirestoreNotification(
+                    projectId = projId,
+                    findingId = findingId.toString(),
+                    recipientEmail = picEmail,
+                    senderUid = user?.uid ?: "",
+                    senderName = actor,
+                    senderEmail = email,
+                    title = "⚠️ Tugas Temuan Baru: ${findingItem?.ruleId ?: "#$findingId"}",
+                    message = "Anda ditunjuk oleh $actor sebagai PIC di ${findingItem?.area ?: "Area Lapangan"}.",
+                    type = "ASSIGNMENT",
+                    isCritical = findingItem?.isCritical ?: false
+                )
+            )
 
             val msg = if (_appLanguage.value == AppLanguage.ID) {
                 "Temuan berhasil ditugaskan kepada PIC: $picName"
             } else {
                 "Finding successfully assigned to PIC: $picName"
             }
+            SyncScheduler.enqueueImmediateSync(getApplication())
             _uiMessage.emit(msg)
         }
     }
@@ -717,6 +981,7 @@ class LsrViewModel(application: Application) : AndroidViewModel(application) {
                 FirestoreActionLog(
                     findingId = "finding_$findingId",
                     projectId = projId,
+                    actorUid = user?.uid ?: "",
                     actorName = actor,
                     actorRole = role,
                     actionType = "ACTION_SUBMITTED",
@@ -725,12 +990,29 @@ class LsrViewModel(application: Application) : AndroidViewModel(application) {
                     remarks = correctiveAction
                 )
             )
+            val findingItem = findings.value.find { it.id == findingId }
+            firestoreManager.pushCrossUserNotification(
+                FirestoreNotification(
+                    projectId = projId,
+                    findingId = findingId.toString(),
+                    recipientUid = findingItem?.inspectorUid ?: "",
+                    recipientEmail = findingItem?.inspectorEmail ?: "",
+                    senderUid = user?.uid ?: "",
+                    senderName = actor,
+                    senderEmail = email,
+                    title = "🛠️ Perbaikan Diajukan: ${findingItem?.ruleId ?: "#$findingId"}",
+                    message = "$actor mengajukan tindakan perbaikan di ${findingItem?.area ?: "Area"}. Silakan verifikasi.",
+                    type = "ACTION_SUBMITTED",
+                    isCritical = false
+                )
+            )
 
             val msg = if (_appLanguage.value == AppLanguage.ID) {
                 "Tindakan perbaikan berhasil diajukan untuk review auditor."
             } else {
                 "Corrective action submitted for auditor review."
             }
+            SyncScheduler.enqueueImmediateSync(getApplication())
             _uiMessage.emit(msg)
         }
     }
@@ -771,6 +1053,7 @@ class LsrViewModel(application: Application) : AndroidViewModel(application) {
                 FirestoreActionLog(
                     findingId = "finding_$findingId",
                     projectId = projId,
+                    actorUid = user?.uid ?: "",
                     actorName = actor,
                     actorRole = role,
                     actionType = "VERIFIED_AND_CLOSED",
@@ -780,12 +1063,28 @@ class LsrViewModel(application: Application) : AndroidViewModel(application) {
                     rating = rating
                 )
             )
+            val findingItem = findings.value.find { it.id == findingId }
+            firestoreManager.pushCrossUserNotification(
+                FirestoreNotification(
+                    projectId = projId,
+                    findingId = findingId.toString(),
+                    recipientEmail = findingItem?.assignedPicEmail ?: "",
+                    senderUid = user?.uid ?: "",
+                    senderName = actor,
+                    senderEmail = email,
+                    title = "✅ Temuan Ditutup ($rating/5 ⭐): ${findingItem?.ruleId ?: "#$findingId"}",
+                    message = "Audit di ${findingItem?.area ?: "Area"} telah diverifikasi & ditutup oleh $actor.",
+                    type = "CLOSED",
+                    isCritical = false
+                )
+            )
 
             val msg = if (_appLanguage.value == AppLanguage.ID) {
                 "Temuan berhasil diverifikasi dan DITUTUP dengan Rating $rating ⭐"
             } else {
                 "Finding verified and CLOSED with Rating $rating ⭐"
             }
+            SyncScheduler.enqueueImmediateSync(getApplication())
             _uiMessage.emit(msg)
         }
     }
@@ -820,6 +1119,7 @@ class LsrViewModel(application: Application) : AndroidViewModel(application) {
                 FirestoreActionLog(
                     findingId = "finding_$findingId",
                     projectId = projId,
+                    actorUid = user?.uid ?: "",
                     actorName = actor,
                     actorRole = role,
                     actionType = "REOPENED_BY_INSPECTOR",
@@ -828,12 +1128,200 @@ class LsrViewModel(application: Application) : AndroidViewModel(application) {
                     remarks = reopenReason
                 )
             )
+            val findingItem = findings.value.find { it.id == findingId }
+            firestoreManager.pushCrossUserNotification(
+                FirestoreNotification(
+                    projectId = projId,
+                    findingId = findingId.toString(),
+                    recipientEmail = findingItem?.assignedPicEmail ?: "",
+                    senderUid = user?.uid ?: "",
+                    senderName = actor,
+                    senderEmail = email,
+                    title = "🔄 Perbaikan Ditolak: ${findingItem?.ruleId ?: "#$findingId"}",
+                    message = "Catatan $actor: $reopenReason",
+                    type = "REOPENED",
+                    isCritical = true
+                )
+            )
             val msg = if (_appLanguage.value == AppLanguage.ID) {
                 "Temuan ditolak dan dibuka kembali untuk perbaikan ulang."
             } else {
                 "Finding rejected and reopened for corrective revision."
             }
+            SyncScheduler.enqueueImmediateSync(getApplication())
             _uiMessage.emit(msg)
+        }
+    }
+
+    fun sendFindingMessage(findingId: Int, message: String) {
+        if (message.isBlank()) return
+        viewModelScope.launch {
+            val user = currentUser.value
+            val actor = if (_inspectorName.value.isNotBlank()) _inspectorName.value else (user?.displayName ?: "User")
+            val email = user?.email ?: ""
+            val role = if (_inspectorRole.value.isNotBlank()) _inspectorRole.value else "HSE Team"
+            val projId = activeProject.value?.id ?: "lower-zakum-operations"
+
+            val docs = repository.sendFindingCommentOrReminder(
+                findingId = findingId,
+                actorUid = user?.uid ?: "",
+                actorName = actor,
+                actorEmail = email,
+                actorRole = role,
+                message = message,
+                isReminder = false,
+                projectId = projId
+            )
+            if (docs != null) {
+                firestoreManager.recordAuditActionLog(docs.first)
+                firestoreManager.pushCrossUserNotification(docs.second)
+                _uiMessage.emit(if (_appLanguage.value == AppLanguage.ID) "Pesan terkirim ke tim terkait." else "Message sent to assignee.")
+            }
+        }
+    }
+
+    fun sendReminderPing(findingId: Int) {
+        viewModelScope.launch {
+            val user = currentUser.value
+            val actor = if (_inspectorName.value.isNotBlank()) _inspectorName.value else (user?.displayName ?: "Inspector")
+            val email = user?.email ?: ""
+            val role = if (_inspectorRole.value.isNotBlank()) _inspectorRole.value else "HSE Team"
+            val projId = activeProject.value?.id ?: "lower-zakum-operations"
+
+            val defaultReminder = if (_appLanguage.value == AppLanguage.ID) {
+                "🔔 Pengingat Prioritas dari $actor: Mohon segera perbarui status tindak lanjut temuan ini."
+            } else {
+                "🔔 Priority Reminder from $actor: Please update corrective action progress on this finding."
+            }
+
+            val docs = repository.sendFindingCommentOrReminder(
+                findingId = findingId,
+                actorUid = user?.uid ?: "",
+                actorName = actor,
+                actorEmail = email,
+                actorRole = role,
+                message = defaultReminder,
+                isReminder = true,
+                projectId = projId
+            )
+            if (docs != null) {
+                firestoreManager.recordAuditActionLog(docs.first)
+                firestoreManager.pushCrossUserNotification(docs.second)
+                _uiMessage.emit(if (_appLanguage.value == AppLanguage.ID) "🔔 Reminder push notification dikirim!" else "🔔 Reminder push notification sent!")
+            }
+        }
+    }
+
+    fun loadMoreFeed() {
+        _feedLimit.value += 25
+    }
+
+    fun loadMoreNotifications() {
+        _notifLimit.value += 25
+    }
+
+    fun loadRecordDetail(recordId: Int, onLoaded: (InspectionRecord) -> Unit) {
+        viewModelScope.launch {
+            val record = repository.getInspectionRecordById(recordId)
+            if (record != null) {
+                onLoaded(record)
+            }
+        }
+    }
+
+    fun refreshAllData() {
+        viewModelScope.launch {
+            _isRefreshing.value = true
+            firestoreManager.refreshData()
+            firestoreManager.syncDeltaForActiveProject()
+            SyncScheduler.enqueueImmediateSync(getApplication())
+            _isRefreshing.value = false
+            val msg = if (_appLanguage.value == AppLanguage.ID) {
+                "Sinkronisasi delta & antrean cloud selesai."
+            } else {
+                "Delta sync & cloud queue refreshed."
+            }
+            _uiMessage.emit(msg)
+        }
+    }
+
+    fun retryPendingSync() {
+        SyncScheduler.enqueueImmediateSync(getApplication())
+        viewModelScope.launch {
+            firestoreManager.syncDeltaForActiveProject()
+            val msg = if (_appLanguage.value == AppLanguage.ID) {
+                "Antrean sinkronisasi dijalankan di latar belakang."
+            } else {
+                "Background sync queue triggered."
+            }
+            _uiMessage.emit(msg)
+        }
+    }
+
+    fun deleteReadNotifications() {
+        viewModelScope.launch {
+            repository.deleteReadNotifications()
+            val msg = if (_appLanguage.value == AppLanguage.ID) {
+                "Notifikasi yang sudah dibaca dibersihkan."
+            } else {
+                "Read notifications cleared."
+            }
+            _uiMessage.emit(msg)
+        }
+    }
+
+    fun attachFindingEvidencePhoto(findingId: Int, sourceUri: Uri) {
+        viewModelScope.launch {
+            val result = EvidencePhotoHelper.compressAndSaveEvidence(
+                context = getApplication(),
+                sourceUri = sourceUri,
+                findingId = findingId
+            )
+            if (result.isSuccess) {
+                val file = result.getOrThrow()
+                repository.attachFindingEvidencePhoto(findingId, file.absolutePath)
+                SyncScheduler.enqueueImmediateSync(getApplication())
+                val msg = if (_appLanguage.value == AppLanguage.ID) {
+                    "Foto bukti dikompresi (${file.length() / 1024} KB) & masuk antrean unggah."
+                } else {
+                    "Evidence photo compressed (${file.length() / 1024} KB) & queued for upload."
+                }
+                _uiMessage.emit(msg)
+            } else {
+                val msg = if (_appLanguage.value == AppLanguage.ID) {
+                    "Gagal memproses foto bukti."
+                } else {
+                    "Failed to process evidence photo."
+                }
+                _uiMessage.emit(msg)
+            }
+        }
+    }
+
+    fun exportRecordToPdf(record: InspectionRecord, onReady: (Uri) -> Unit) {
+        viewModelScope.launch {
+            val uri = withContext(Dispatchers.IO) {
+                ReportExporter.exportAuditPdf(
+                    context = getApplication(),
+                    record = record,
+                    checklistItems = checklistItems.value,
+                    language = _appLanguage.value
+                )
+            }
+            onReady(uri)
+        }
+    }
+
+    fun exportBatchCsv(onReady: (Uri) -> Unit) {
+        viewModelScope.launch {
+            val uri = withContext(Dispatchers.IO) {
+                ReportExporter.exportBatchCsv(
+                    context = getApplication(),
+                    summaries = feedSummaries.value,
+                    findings = findings.value
+                )
+            }
+            onReady(uri)
         }
     }
 
@@ -896,6 +1384,7 @@ class LsrViewModel(application: Application) : AndroidViewModel(application) {
     fun updateFindingStatus(findingId: Int, status: String, correctiveAction: String) {
         viewModelScope.launch {
             repository.updateFinding(findingId, status, correctiveAction)
+            SyncScheduler.enqueueImmediateSync(getApplication())
             val msg = if (_appLanguage.value == AppLanguage.ID) {
                 "Status temuan berhasil diubah menjadi $status"
             } else {
@@ -974,6 +1463,7 @@ class LsrViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             val user = currentUser.value
+            val projId = activeProject.value?.id ?: ""
             val result = repository.submitInspection(
                 inspectorName = _inspectorName.value,
                 area = _area.value,
@@ -985,8 +1475,53 @@ class LsrViewModel(application: Application) : AndroidViewModel(application) {
                 firebaseUrl = _firebaseUrl.value,
                 isFirebaseSyncEnabled = _isFirebaseSyncEnabled.value,
                 userUid = user?.uid ?: "",
-                userEmail = user?.email ?: ""
+                userEmail = user?.email ?: "",
+                projectId = projId,
+                company = _companyName.value,
+                notifPicAlerts = _notifPicAlerts.value,
+                notifCriticalAlerts = _notifCriticalAlerts.value
             )
+
+            // Push cross-user notifications for newly assigned PICs & critical alerts
+            if (projId.isNotBlank()) {
+                val itemMap = applicableItems.associateBy { it.id }
+                activeList.filter { it.answer == AnswerType.NO.name }.forEach { ans ->
+                    val rule = itemMap[ans.questionId]
+                    if (ans.assignedPicName.isNotBlank() && ans.assignedPicEmail.isNotBlank()) {
+                        firestoreManager.pushCrossUserNotification(
+                            FirestoreNotification(
+                                projectId = projId,
+                                findingId = ans.questionId,
+                                recipientEmail = ans.assignedPicEmail,
+                                senderUid = user?.uid ?: "",
+                                senderName = _inspectorName.value,
+                                senderEmail = user?.email ?: "",
+                                title = "⚠️ Tugas Temuan Baru: ${ans.questionId}",
+                                message = "Ditugaskan oleh ${_inspectorName.value} di ${_area.value}: ${rule?.item_text ?: ""}",
+                                type = "ASSIGNMENT",
+                                isCritical = rule?.is_critical ?: false
+                            )
+                        )
+                    } else if (rule?.is_critical == true) {
+                        firestoreManager.pushCrossUserNotification(
+                            FirestoreNotification(
+                                projectId = projId,
+                                findingId = ans.questionId,
+                                senderUid = user?.uid ?: "",
+                                senderName = _inspectorName.value,
+                                senderEmail = user?.email ?: "",
+                                title = "🚨 Temuan Kritis LSR: ${ans.questionId}",
+                                message = "Risiko fatal di ${_area.value} (${_companyName.value}): ${rule.item_text}",
+                                type = "CRITICAL",
+                                isCritical = true,
+                                isBroadcast = true
+                            )
+                        )
+                    }
+                }
+            }
+
+            SyncScheduler.enqueueImmediateSync(getApplication())
 
             _isSubmitting.value = false
             if (result.isSuccess) {

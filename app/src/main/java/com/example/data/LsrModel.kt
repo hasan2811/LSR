@@ -47,7 +47,27 @@ data class InspectionRecord(
     val timestamp: Long = System.currentTimeMillis(),
     val answersJson: String, // JSON mapping of questionId -> AnswerData
     val score: Int, // Percentage of compliance
-    val isSynced: Boolean = false
+    val isSynced: Boolean = false,
+    val projectId: String = "",
+    val company: String = "",
+    val lsrCategories: String = ""
+)
+
+data class InspectionSummary(
+    val id: Int,
+    val inspectorName: String,
+    val area: String,
+    val timestamp: Long,
+    val score: Int,
+    val isSynced: Boolean,
+    val projectId: String = "",
+    val company: String = "",
+    val lsrCategories: String = ""
+)
+
+data class DashboardMetrics(
+    val totalAudits: Int = 0,
+    val avgScore: Int = 100
 )
 
 data class AnswerData(
@@ -93,8 +113,20 @@ data class FindingItem(
     val satisfactionRating: Int = 0, // 1 to 5 stars
     val inspectorComment: String = "",
     val timestamp: Long = System.currentTimeMillis(),
-    val isSynced: Boolean = false
-)
+    val isSynced: Boolean = false,
+    val projectId: String = "",
+    val evidencePhotoUri: String = "",
+    val evidencePhotoUrl: String = "",
+    val company: String = ""
+) {
+    fun slaDeadlineTimestamp(): Long = timestamp + (if (isCritical) 24L else 72L) * 3_600_000L
+
+    fun isOverdue(now: Long = System.currentTimeMillis()): Boolean =
+        !status.equals("CLOSED", ignoreCase = true) && now > slaDeadlineTimestamp()
+
+    fun slaRemainingHours(now: Long = System.currentTimeMillis()): Long =
+        (slaDeadlineTimestamp() - now) / 3_600_000L
+}
 
 @Entity(tableName = "action_history_logs")
 data class ActionHistoryLog(
@@ -120,13 +152,76 @@ data class AppNotification(
     val recipientName: String = "",
     val title: String,
     val message: String,
-    val type: String, // "ASSIGNMENT", "ACTION_SUBMITTED", "REOPENED", "CLOSED"
+    val type: String, // "ASSIGNMENT", "ACTION_SUBMITTED", "REOPENED", "CLOSED", "REMINDER", "CHAT_MESSAGE"
     val findingId: Int = 0,
     val ruleId: String = "",
     val timestamp: Long = System.currentTimeMillis(),
     val isRead: Boolean = false,
-    val isSynced: Boolean = false
+    val isSynced: Boolean = false,
+    val remoteId: String = "",
+    val senderName: String = ""
 )
+
+enum class DateRangeFilter {
+    ALL, TODAY, LAST_7_DAYS, LAST_30_DAYS
+}
+
+enum class AppThemeMode {
+    SYSTEM, LIGHT, DARK
+}
+
+data class ActivityFilterCriteria(
+    val dateRange: DateRangeFilter = DateRangeFilter.ALL,
+    val userName: String = "",
+    val lsrType: String = "",
+    val company: String = "",
+    val location: String = ""
+) {
+    val activeCount: Int
+        get() = listOfNotNull(
+            dateRange.takeIf { it != DateRangeFilter.ALL },
+            userName.takeIf { it.isNotBlank() },
+            lsrType.takeIf { it.isNotBlank() },
+            company.takeIf { it.isNotBlank() },
+            location.takeIf { it.isNotBlank() }
+        ).size
+
+    fun matches(
+        timestamp: Long,
+        users: List<String>,
+        lsrTypes: String,
+        itemCompany: String,
+        itemLocation: String,
+        now: Long = System.currentTimeMillis()
+    ): Boolean {
+        val matchesDate = when (dateRange) {
+            DateRangeFilter.ALL -> true
+            DateRangeFilter.TODAY -> {
+                val calNow = java.util.Calendar.getInstance().apply { timeInMillis = now }
+                val calItem = java.util.Calendar.getInstance().apply { timeInMillis = timestamp }
+                calNow.get(java.util.Calendar.YEAR) == calItem.get(java.util.Calendar.YEAR) &&
+                    calNow.get(java.util.Calendar.DAY_OF_YEAR) == calItem.get(java.util.Calendar.DAY_OF_YEAR)
+            }
+            DateRangeFilter.LAST_7_DAYS -> timestamp >= now - 7L * 86_400_000L
+            DateRangeFilter.LAST_30_DAYS -> timestamp >= now - 30L * 86_400_000L
+        }
+        if (!matchesDate) return false
+
+        if (userName.isNotBlank() && users.none { it.equals(userName, ignoreCase = true) || it.contains(userName, ignoreCase = true) }) {
+            return false
+        }
+        if (lsrType.isNotBlank() && !lsrTypes.contains(lsrType, ignoreCase = true)) {
+            return false
+        }
+        if (company.isNotBlank() && !itemCompany.equals(company, ignoreCase = true) && !itemCompany.contains(company, ignoreCase = true)) {
+            return false
+        }
+        if (location.isNotBlank() && !itemLocation.equals(location, ignoreCase = true) && !itemLocation.contains(location, ignoreCase = true)) {
+            return false
+        }
+        return true
+    }
+}
 
 data class TeamRosterMember(
     val name: String,
