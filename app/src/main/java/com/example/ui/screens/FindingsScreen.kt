@@ -2,6 +2,11 @@ package com.example.ui.screens
 
 import android.content.Intent
 import androidx.compose.animation.*
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -9,6 +14,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -20,6 +26,7 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -31,13 +38,18 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import android.net.Uri
 import com.example.data.*
+import com.example.ui.PagedFindingsUiState
 import com.example.ui.components.ActiveFilterSummaryStrip
 import com.example.ui.components.ActivityFilterBottomSheet
 import com.example.ui.components.SleekSearchFilterBar
 import com.example.ui.theme.*
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.map
 import java.text.SimpleDateFormat
 import java.util.*
+import kotlin.math.ceil
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -62,17 +74,28 @@ fun FindingsScreen(
     onReopenFinding: (findingId: Int, reason: String) -> Unit,
     onUpdateStatus: (id: Int, status: String, correctiveAction: String) -> Unit,
     onDeleteFinding: (id: Int) -> Unit,
+    canManageFinding: (FindingItem) -> Boolean = { true },
+    pagedState: PagedFindingsUiState? = null,
+    onPagedSearchChanged: (String) -> Unit = {},
+    onPagedFilterChanged: (String) -> Unit = {},
+    onLoadNextPage: () -> Unit = {},
+    onRetryAppend: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
-    var selectedFilter by remember { mutableStateOf("ALL") } // "ALL", "OPEN", "IN_REVIEW", "CLOSED", "REOPENED", "OVERDUE"
+    var localFilter by remember { mutableStateOf("ALL") } // "ALL", "OPEN", "IN_REVIEW", "CLOSED", "REOPENED", "OVERDUE"
+    var localSearchQuery by remember { mutableStateOf("") }
+    val selectedFilter = pagedState?.statusFilter ?: localFilter
+    val searchQuery = pagedState?.searchQuery ?: localSearchQuery
+
     var selectedFindingForDetail by remember { mutableStateOf<FindingItem?>(null) }
-    var searchQuery by remember { mutableStateOf("") }
     var showFilterSheet by remember { mutableStateOf(false) }
 
-    // If detail is active, find updated finding from list
-    val currentActiveFinding = remember(selectedFindingForDetail, findings) {
+    // If detail is active, find updated finding from paged cache or full list
+    val currentActiveFinding = remember(selectedFindingForDetail, findings, pagedState?.items) {
         if (selectedFindingForDetail == null) null
-        else findings.find { it.id == selectedFindingForDetail!!.id } ?: selectedFindingForDetail
+        else pagedState?.items?.find { it.id == selectedFindingForDetail!!.id }
+            ?: findings.find { it.id == selectedFindingForDetail!!.id }
+            ?: selectedFindingForDetail
     }
 
     if (currentActiveFinding != null) {
@@ -81,6 +104,7 @@ fun FindingsScreen(
             finding = currentActiveFinding,
             teamRoster = teamRoster,
             actionLogsFlow = onGetActionLogs(currentActiveFinding.id),
+            canManageFinding = canManageFinding(currentActiveFinding),
             onBack = { selectedFindingForDetail = null },
             onAssignPic = { name, email, role ->
                 onAssignPic(currentActiveFinding.id, name, email, role)
@@ -111,34 +135,38 @@ fun FindingsScreen(
         return
     }
 
-    val filteredFindings = remember(findings, selectedFilter, searchQuery, filterCriteria) {
-        findings.filter { finding ->
-            val statusNorm = finding.status.uppercase()
-            val matchesFilter = when (selectedFilter) {
-                "OPEN" -> statusNorm == "OPEN"
-                "IN_REVIEW" -> statusNorm == "ACTION_SUBMITTED" || statusNorm == "IN_REVIEW" || statusNorm == "IN_PROGRESS"
-                "CLOSED" -> statusNorm == "CLOSED"
-                "REOPENED" -> statusNorm == "REOPENED"
-                "OVERDUE" -> finding.isOverdue()
-                else -> true
-            }
-            val matchesSearch = if (searchQuery.isBlank()) true else {
-                finding.itemText.contains(searchQuery, ignoreCase = true) ||
+    val filteredFindings = remember(findings, selectedFilter, searchQuery, filterCriteria, pagedState?.items) {
+        if (pagedState != null) {
+            pagedState.items
+        } else {
+            findings.filter { finding ->
+                val statusNorm = finding.status.uppercase()
+                val matchesFilter = when (selectedFilter) {
+                    "OPEN" -> statusNorm == "OPEN"
+                    "IN_REVIEW" -> statusNorm == "ACTION_SUBMITTED" || statusNorm == "IN_REVIEW" || statusNorm == "IN_PROGRESS"
+                    "CLOSED" -> statusNorm == "CLOSED"
+                    "REOPENED" -> statusNorm == "REOPENED"
+                    "OVERDUE" -> finding.isOverdue()
+                    else -> true
+                }
+                val matchesSearch = if (searchQuery.isBlank()) true else {
+                    finding.itemText.contains(searchQuery, ignoreCase = true) ||
                         finding.category.contains(searchQuery, ignoreCase = true) ||
                         finding.ruleId.contains(searchQuery, ignoreCase = true) ||
                         finding.area.contains(searchQuery, ignoreCase = true) ||
                         finding.company.contains(searchQuery, ignoreCase = true) ||
                         finding.inspectorName.contains(searchQuery, ignoreCase = true) ||
                         finding.assignedPicName.contains(searchQuery, ignoreCase = true)
+                }
+                val matchesCriteria = filterCriteria.matches(
+                    timestamp = finding.timestamp,
+                    users = listOf(finding.inspectorName, finding.assignedPicName),
+                    lsrTypes = "${finding.category} ${finding.ruleId}",
+                    itemCompany = finding.company,
+                    itemLocation = finding.area
+                )
+                matchesFilter && matchesSearch && matchesCriteria
             }
-            val matchesCriteria = filterCriteria.matches(
-                timestamp = finding.timestamp,
-                users = listOf(finding.inspectorName, finding.assignedPicName),
-                lsrTypes = "${finding.category} ${finding.ruleId}",
-                itemCompany = finding.company,
-                itemLocation = finding.area
-            )
-            matchesFilter && matchesSearch && matchesCriteria
         }
     }
 
@@ -283,7 +311,9 @@ fun FindingsScreen(
         // Sleek High-Contrast Search + Filter Button
         SleekSearchFilterBar(
             query = searchQuery,
-            onQueryChange = { searchQuery = it },
+            onQueryChange = { q ->
+                if (pagedState != null) onPagedSearchChanged(q) else localSearchQuery = q
+            },
             placeholder = if (language == AppLanguage.ID) "Cari temuan, PIC, area, atau aturan..." else "Search findings, PIC, area, or rule...",
             activeFilterCount = filterCriteria.activeCount,
             onOpenFilterSheet = { showFilterSheet = true }
@@ -315,6 +345,9 @@ fun FindingsScreen(
         Spacer(modifier = Modifier.height(10.dp))
 
         // Filter chips
+        val selectStatus: (String) -> Unit = { statusKey ->
+            if (pagedState != null) onPagedFilterChanged(statusKey) else localFilter = statusKey
+        }
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -323,36 +356,36 @@ fun FindingsScreen(
         ) {
             FilterChip(
                 selected = selectedFilter == "ALL",
-                onClick = { selectedFilter = "ALL" },
+                onClick = { selectStatus("ALL") },
                 label = { Text("${AppStrings.get("filter_all", language)} (${findings.size})") }
             )
             FilterChip(
                 selected = selectedFilter == "OPEN",
-                onClick = { selectedFilter = "OPEN" },
+                onClick = { selectStatus("OPEN") },
                 label = { Text(if (language == AppLanguage.ID) "Terbuka ($openCount)" else "Open ($openCount)") },
                 colors = FilterChipDefaults.filterChipColors(selectedContainerColor = DangerRed.copy(alpha = 0.15f))
             )
             FilterChip(
                 selected = selectedFilter == "IN_REVIEW",
-                onClick = { selectedFilter = "IN_REVIEW" },
+                onClick = { selectStatus("IN_REVIEW") },
                 label = { Text(if (language == AppLanguage.ID) "Ditinjau ($inReviewCount)" else "In Review ($inReviewCount)") },
                 colors = FilterChipDefaults.filterChipColors(selectedContainerColor = AmberGold.copy(alpha = 0.15f))
             )
             FilterChip(
                 selected = selectedFilter == "CLOSED",
-                onClick = { selectedFilter = "CLOSED" },
+                onClick = { selectStatus("CLOSED") },
                 label = { Text(if (language == AppLanguage.ID) "Selesai ($closedCount)" else "Closed ($closedCount)") },
                 colors = FilterChipDefaults.filterChipColors(selectedContainerColor = SafetyTeal.copy(alpha = 0.15f))
             )
             FilterChip(
                 selected = selectedFilter == "REOPENED",
-                onClick = { selectedFilter = "REOPENED" },
+                onClick = { selectStatus("REOPENED") },
                 label = { Text(if (language == AppLanguage.ID) "Dibuka Ulang ($reopenedCount)" else "Reopened ($reopenedCount)") },
                 colors = FilterChipDefaults.filterChipColors(selectedContainerColor = CriticalOrange.copy(alpha = 0.15f))
             )
             FilterChip(
                 selected = selectedFilter == "OVERDUE",
-                onClick = { selectedFilter = "OVERDUE" },
+                onClick = { selectStatus("OVERDUE") },
                 label = { Text("${AppStrings.get("sla_overdue", language)} ($overdueCount)") },
                 colors = FilterChipDefaults.filterChipColors(selectedContainerColor = DangerRed.copy(alpha = 0.18f))
             )
@@ -360,7 +393,39 @@ fun FindingsScreen(
 
         Spacer(modifier = Modifier.height(10.dp))
 
-        // Findings List with Pull-to-Refresh
+        val findingsListState = rememberLazyListState()
+        val isInitialSkeleton = pagedState?.isInitialLoading == true && filteredFindings.isEmpty()
+
+        // 75% Prefetching for Cursor-Based Pagination
+        if (pagedState != null) {
+            LaunchedEffect(
+                findingsListState,
+                filteredFindings.size,
+                pagedState.isInitialLoading,
+                pagedState.isAppending,
+                pagedState.endReached,
+                pagedState.appendError
+            ) {
+                snapshotFlow { findingsListState.layoutInfo }
+                    .map { info ->
+                        val total = info.totalItemsCount
+                        val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: 0
+                        total > 0 && lastVisible >= ceil(total * 0.75f).toInt()
+                    }
+                    .distinctUntilChanged()
+                    .filter { shouldPrefetch ->
+                        shouldPrefetch &&
+                            filteredFindings.isNotEmpty() &&
+                            !pagedState.isInitialLoading &&
+                            !pagedState.isAppending &&
+                            !pagedState.endReached &&
+                            pagedState.appendError == null
+                    }
+                    .collect { onLoadNextPage() }
+            }
+        }
+
+        // Findings List with Pull-to-Refresh + 4 Paging States
         PullToRefreshBox(
             isRefreshing = isRefreshing,
             onRefresh = onRefresh,
@@ -368,7 +433,17 @@ fun FindingsScreen(
                 .fillMaxWidth()
                 .weight(1f)
         ) {
-            if (filteredFindings.isEmpty()) {
+            if (isInitialSkeleton) {
+                // State 1: Initial Skeleton Loading
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    items(5, key = { "skeleton_$it" }) {
+                        FindingSkeletonCard()
+                    }
+                }
+            } else if (filteredFindings.isEmpty()) {
                 Box(
                     modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center
@@ -420,10 +495,16 @@ fun FindingsScreen(
                 }
             } else {
                 LazyColumn(
+                    state = findingsListState,
                     modifier = Modifier.fillMaxSize(),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    contentPadding = PaddingValues(bottom = 20.dp)
                 ) {
-                    items(filteredFindings, key = { it.id }) { finding ->
+                    items(
+                        items = filteredFindings,
+                        key = { it.id },
+                        contentType = { "finding_card" }
+                    ) { finding ->
                         EnterpriseFindingCard(
                             language = language,
                             finding = finding,
@@ -431,8 +512,127 @@ fun FindingsScreen(
                             onDeleteClicked = { onDeleteFinding(finding.id) }
                         )
                     }
+
+                    // State 2: Append Loading
+                    if (pagedState?.isAppending == true) {
+                        item(key = "findings_append_loading", contentType = "footer") {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 12.dp),
+                                horizontalArrangement = Arrangement.Center,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = AppStrings.get("paging_loading_more", language),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+
+                    // State 3: Append Error + Retry Button
+                    val appendErr = pagedState?.appendError
+                    if (appendErr != null && pagedState.isAppending == false) {
+                        item(key = "findings_append_error", contentType = "footer") {
+                            Surface(
+                                shape = RoundedCornerShape(14.dp),
+                                color = DangerRed.copy(alpha = 0.08f),
+                                border = BorderStroke(1.dp, DangerRed.copy(alpha = 0.35f)),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = appendErr,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    FilledTonalButton(onClick = onRetryAppend) {
+                                        Text(
+                                            text = AppStrings.get("paging_retry_btn", language),
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // State 4: End of List
+                    if (pagedState?.endReached == true && pagedState.isAppending == false) {
+                        item(key = "findings_end_of_list", contentType = "footer") {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 10.dp),
+                                horizontalArrangement = Arrangement.Center,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.CheckCircleOutline,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(15.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "${AppStrings.get("paging_end_findings", language)} (${filteredFindings.size})",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun FindingSkeletonCard() {
+    val pulse = rememberInfiniteTransition(label = "findingSkeleton")
+    val alpha by pulse.animateFloat(
+        initialValue = 0.35f,
+        targetValue = 0.85f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 850),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "findingSkeletonAlpha"
+    )
+    val blockColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = alpha)
+
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)),
+        modifier = Modifier
+            .fillMaxWidth()
+            .alpha(alpha)
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Box(modifier = Modifier.width(78.dp).height(18.dp).background(blockColor, RoundedCornerShape(6.dp)))
+                Box(modifier = Modifier.width(74.dp).height(18.dp).background(blockColor, RoundedCornerShape(6.dp)))
+            }
+            Box(modifier = Modifier.fillMaxWidth(0.55f).height(14.dp).background(blockColor, RoundedCornerShape(6.dp)))
+            Box(modifier = Modifier.fillMaxWidth().height(32.dp).background(blockColor, RoundedCornerShape(8.dp)))
+            Box(modifier = Modifier.fillMaxWidth().height(24.dp).background(blockColor, RoundedCornerShape(8.dp)))
         }
     }
 }

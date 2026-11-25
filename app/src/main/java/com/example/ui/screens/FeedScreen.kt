@@ -1,6 +1,8 @@
 package com.example.ui.screens
 
 import android.content.Intent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -8,6 +10,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -19,6 +22,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -28,12 +32,17 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.*
+import com.example.ui.PagedFeedUiState
 import com.example.ui.components.ActiveFilterSummaryStrip
 import com.example.ui.components.ActivityFilterBottomSheet
 import com.example.ui.components.SleekSearchFilterBar
 import com.example.ui.theme.*
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.map
 import java.text.SimpleDateFormat
 import java.util.*
+import kotlin.math.ceil
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -62,6 +71,9 @@ fun FeedScreen(
     onMarkNotificationRead: (Int) -> Unit,
     onMarkAllNotificationsRead: () -> Unit,
     onDeleteReadNotifications: () -> Unit,
+    isCloudSyncing: Boolean = false,
+    lastCloudSyncAt: Long = 0L,
+    pagedFeedState: PagedFeedUiState = PagedFeedUiState(),
     modifier: Modifier = Modifier
 ) {
     var activeSubTab by remember { mutableIntStateOf(0) } // 0: Notifications & Alerts, 1: Audit Summaries
@@ -231,6 +243,80 @@ fun FeedScreen(
                             )
                         }
                     }
+                }
+            }
+        }
+
+        // Sleek Non-Blocking Instant Cache & Live Sync Strip
+        val syncActive = isCloudSyncing || isRefreshing
+        val syncAnim = rememberInfiniteTransition(label = "feedSync")
+        val syncAngle by syncAnim.animateFloat(
+            initialValue = 0f,
+            targetValue = 360f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(950, easing = LinearEasing),
+                repeatMode = RepeatMode.Restart
+            ),
+            label = "feedSyncAngle"
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Surface(
+            shape = RoundedCornerShape(12.dp),
+            color = if (syncActive) SafetyBlue.copy(alpha = 0.1f) else SafetyTeal.copy(alpha = 0.08f),
+            border = BorderStroke(1.dp, if (syncActive) SafetyBlue.copy(alpha = 0.35f) else SafetyTeal.copy(alpha = 0.25f)),
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { onRefresh() }
+        ) {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(
+                            imageVector = if (syncActive) Icons.Default.Sync else Icons.Default.Bolt,
+                            contentDescription = null,
+                            tint = if (syncActive) SafetyBlue else SafetyTeal,
+                            modifier = Modifier
+                                .size(14.dp)
+                                .then(if (syncActive) Modifier.rotate(syncAngle) else Modifier)
+                        )
+                        Text(
+                            text = if (syncActive) {
+                                AppStrings.get("sync_state_syncing", language)
+                            } else {
+                                "${AppStrings.get("sync_state_instant", language)} • ${AppStrings.formatRelativeSync(lastCloudSyncAt, language)}"
+                            },
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (syncActive) SafetyBlue else MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    Text(
+                        text = if (isId) "Sync" else "Sync",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = SafetyBlue
+                    )
+                }
+                AnimatedVisibility(visible = syncActive) {
+                    LinearProgressIndicator(
+                        color = SafetyBlue,
+                        trackColor = SafetyBlue.copy(alpha = 0.15f),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(2.dp)
+                    )
                 }
             }
         }
@@ -505,7 +591,27 @@ fun FeedScreen(
                         }
                     }
                 } else {
+                    val notifListState = rememberLazyListState()
+                    val hasMoreNotifs = !pagedFeedState.notifEndReached && notifications.size < totalNotificationsCount
+                    LaunchedEffect(
+                        notifListState,
+                        notifications.size,
+                        pagedFeedState.isNotifAppending,
+                        hasMoreNotifs
+                    ) {
+                        snapshotFlow { notifListState.layoutInfo }
+                            .map { info ->
+                                val total = info.totalItemsCount
+                                val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: 0
+                                total > 0 && lastVisible >= ceil(total * 0.75f).toInt()
+                            }
+                            .distinctUntilChanged()
+                            .filter { it && hasMoreNotifs && !pagedFeedState.isNotifAppending }
+                            .collect { onLoadMoreNotifications() }
+                    }
+
                     LazyColumn(
+                        state = notifListState,
                         modifier = Modifier.fillMaxSize(),
                         verticalArrangement = Arrangement.spacedBy(10.dp),
                         contentPadding = PaddingValues(bottom = 16.dp)
@@ -569,18 +675,48 @@ fun FeedScreen(
                             }
                         }
 
-                        if (notifications.size < totalNotificationsCount) {
-                            item(key = "load_more_notifs") {
+                        if (pagedFeedState.isNotifAppending) {
+                            item(key = "notif_append_spinner") {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 10.dp),
+                                    horizontalArrangement = Arrangement.Center,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = AppStrings.get("paging_loading_more", language),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        } else if (pagedFeedState.notifAppendError != null) {
+                            item(key = "notif_append_error") {
                                 OutlinedButton(
                                     onClick = onLoadMoreNotifications,
                                     shape = RoundedCornerShape(12.dp),
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
                                     Text(
-                                        text = "${AppStrings.get("feed_load_more", language)} (${notifications.size}/$totalNotificationsCount)",
+                                        text = "${AppStrings.get("paging_retry_btn", language)}: ${pagedFeedState.notifAppendError}",
                                         fontWeight = FontWeight.Bold
                                     )
                                 }
+                            }
+                        } else if (!hasMoreNotifs && notifications.isNotEmpty()) {
+                            item(key = "notif_end_of_list") {
+                                Text(
+                                    text = "${AppStrings.get("paging_end_notifications", language)} (${notifications.size})",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    textAlign = TextAlign.Center,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 8.dp)
+                                )
                             }
                         }
                     }
@@ -638,7 +774,27 @@ fun FeedScreen(
                         }
                     }
                 } else {
+                    val auditListState = rememberLazyListState()
+                    val hasMoreAudits = !pagedFeedState.feedEndReached && feedSummaries.size < totalAuditsCount
+                    LaunchedEffect(
+                        auditListState,
+                        feedSummaries.size,
+                        pagedFeedState.isFeedAppending,
+                        hasMoreAudits
+                    ) {
+                        snapshotFlow { auditListState.layoutInfo }
+                            .map { info ->
+                                val total = info.totalItemsCount
+                                val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: 0
+                                total > 0 && lastVisible >= ceil(total * 0.75f).toInt()
+                            }
+                            .distinctUntilChanged()
+                            .filter { it && hasMoreAudits && !pagedFeedState.isFeedAppending }
+                            .collect { onLoadMoreFeed() }
+                    }
+
                     LazyColumn(
+                        state = auditListState,
                         modifier = Modifier.fillMaxSize(),
                         verticalArrangement = Arrangement.spacedBy(10.dp),
                         contentPadding = PaddingValues(bottom = 16.dp)
@@ -698,18 +854,48 @@ fun FeedScreen(
                             }
                         }
 
-                        if (feedSummaries.size < totalAuditsCount) {
-                            item(key = "load_more_audits") {
+                        if (pagedFeedState.isFeedAppending) {
+                            item(key = "audits_append_spinner") {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 10.dp),
+                                    horizontalArrangement = Arrangement.Center,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = AppStrings.get("paging_loading_more", language),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        } else if (pagedFeedState.feedAppendError != null) {
+                            item(key = "audits_append_error") {
                                 OutlinedButton(
                                     onClick = onLoadMoreFeed,
                                     shape = RoundedCornerShape(12.dp),
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
                                     Text(
-                                        text = "${AppStrings.get("feed_load_more", language)} (${feedSummaries.size}/$totalAuditsCount)",
+                                        text = "${AppStrings.get("paging_retry_btn", language)}: ${pagedFeedState.feedAppendError}",
                                         fontWeight = FontWeight.Bold
                                     )
                                 }
+                            }
+                        } else if (!hasMoreAudits && feedSummaries.isNotEmpty()) {
+                            item(key = "audits_end_of_list") {
+                                Text(
+                                    text = "${AppStrings.get("paging_end_feed", language)} (${feedSummaries.size})",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    textAlign = TextAlign.Center,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 8.dp)
+                                )
                             }
                         }
                     }

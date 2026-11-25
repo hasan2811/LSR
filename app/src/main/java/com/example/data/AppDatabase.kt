@@ -16,7 +16,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         ActionHistoryLog::class,
         AppNotification::class
     ],
-    version = 5,
+    version = 6,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -45,6 +45,25 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE finding_items ADD COLUMN remoteDocId TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE finding_items ADD COLUMN updatedAt INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE finding_items ADD COLUMN cachedAt INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("UPDATE finding_items SET updatedAt = timestamp, cachedAt = timestamp WHERE updatedAt = 0")
+                db.execSQL("CREATE INDEX IF NOT EXISTS idx_inspection_cursor ON inspection_records(timestamp, id)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS idx_inspection_proj_cursor ON inspection_records(projectId, timestamp, id)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS idx_inspection_sync ON inspection_records(isSynced, timestamp)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS idx_finding_cursor_proj ON finding_items(projectId, timestamp, id)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS idx_finding_status_cursor ON finding_items(status, timestamp, id)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS idx_finding_sync_ttl ON finding_items(isSynced, cachedAt)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS idx_finding_updated_at ON finding_items(updatedAt)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS idx_finding_remote_doc_id ON finding_items(remoteDocId)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS idx_notif_cursor ON app_notifications(timestamp, id)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS idx_notif_read_ttl ON app_notifications(isRead, timestamp)")
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -52,7 +71,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "lsr_database"
                 )
-                .addMigrations(MIGRATION_3_4, MIGRATION_4_5)
+                .addMigrations(MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
                 .fallbackToDestructiveMigration(dropAllTables = false)
                 .build()
                 INSTANCE = instance

@@ -29,19 +29,20 @@ Saat diminta melakukan tugas pemrograman pada repository ini:
 | `app/src/main/java/com/example/ui/LsrViewModel.kt` | ViewModel terpusat, filter multi-dimensi, pesan/reminder lintas pengguna, tema & preferensi notifikasi. |
 | `app/src/main/java/com/example/ui/components/ActivityFilterSheet.kt` | `SleekSearchFilterBar`, `ActiveFilterSummaryStrip`, dan `ActivityFilterBottomSheet` (Tanggal, User, LSR, Perusahaan, Lokasi). |
 | `app/src/main/java/com/example/ui/screens/` | Layar fitur (`LoginGateScreen`, `DashboardScreen`, `FeedScreen`, `FindingsScreen`, `FindingDetailScreen`, `SettingsScreen`, `ProfileScreen`). |
-| `app/src/main/java/com/example/data/AppDatabase.kt` | Database Room v5 dengan `MIGRATION_3_4` dan `MIGRATION_4_5` non-destruktif. |
-| `app/src/main/java/com/example/data/AppLanguage.kt` | Kamus lokalisasi dwibahasa terpusat (`AppStrings` untuk `ID` & `EN`). |
+| `app/src/main/java/com/example/data/AppDatabase.kt` | Database Room **v6** dengan `MIGRATION_3_4`, `MIGRATION_4_5`, dan `MIGRATION_5_6` non-destruktif. |
+| `app/src/main/java/com/example/data/AppLanguage.kt` | Kamus lokalisasi dwibahasa terpusat (`AppStrings` untuk `ID` & `EN`, termasuk state `paging_*`). |
 | `app/src/main/java/com/example/data/LsrChecklist.kt` | Definisi 42 butir aturan Life-Saving Rules (7 modul IOGP/OSHA) dalam dwibahasa (ID & EN). |
-| `app/src/main/java/com/example/data/LsrModel.kt` | Model data Room SQLite & filter (`ActivityFilterCriteria`, `AppThemeMode`, `FindingItem`, `AppNotification`). |
-| `app/src/main/java/com/example/data/LsrDao.kt` | Kueri database Room lokal untuk CRUD draf, riwayat ringkas, temuan, log aksi, dan notifikasi. |
-| `app/src/main/java/com/example/data/FirestoreManager.kt` | Koneksi real-time Firestore (cache 100 MB), listener notifikasi lintas pengguna, FCM token sync, & `action_logs`. |
+| `app/src/main/java/com/example/data/LsrModel.kt` | Model data Room SQLite (`FindingItem`, `AppNotification`, `InspectionRecord`), indeks komposit, & keyset cursor. |
+| `app/src/main/java/com/example/data/LsrDao.kt` | Kueri Room keyset cursor (`(timestamp, id)`), CRUD draf, temuan, log aksi, & TTL eviction. |
+| `app/src/main/java/com/example/data/FirestoreManager.kt` | Firestore (cache 100 MB), cursor `startAfter` + delta `updatedAt`, notifikasi lintas user, & `action_logs`. |
 | `app/src/main/java/com/example/data/LsrMessagingService.kt` | Penerima pesan FCM & `NotificationHelper.kt` (saluran alert & pengingat). |
-| `app/src/main/java/com/example/data/EvidencePhotoHelper.kt` | Kompresi foto bukti lapangan, upload Firebase Storage, serta `ReportExporter.kt` (PDF A4 & CSV) & `SyncWorker.kt`. |
+| `app/src/main/java/com/example/data/EvidencePhotoHelper.kt` | Kompresi foto bukti lapangan, upload Firebase Storage, `ReportExporter.kt` (PDF A4 & CSV anti-injection), & `SyncWorker.kt` (`SyncWorker`, `DraftReminderWorker`, `CacheEvictionWorker`). |
 | `app/src/main/java/com/example/data/FirebaseAuthManager.kt` | Pengelola autentikasi Firebase (`com.lowerzakum.lsr`) dan resolusi profil personil. |
-| `app/src/main/java/com/example/data/LsrRepository.kt` | Pipeline sinkronisasi Room, pesan/pengingat lintas pengguna, Google Apps Script, dan Firebase RTDB. |
+| `app/src/main/java/com/example/data/LsrRepository.kt` | Pipeline Room + GAS v3.2 + RTDB, L1 bounded cache (`250` + `LruCache(200)`), Stale-While-Revalidate delta sync, & 25s mutation lock. |
 | `app/src/main/java/com/example/ui/theme/` | Sistem desain Material 3 (`Color.kt` dengan palet gelap obsidian kontras tinggi, `Theme.kt`, `Type.kt`). |
-| `firebase.json` / `firestore.indexes.json` / `firestore.rules` | Konfigurasi Firebase CLI, indeks komposit `notifications` & `findings`, serta prototipe Security Rules. |
-| `app/src/test/java/com/example/ScaleFeaturesUnitTest.kt` | Unit test SLA temuan, CSV escape, filter multi-dimensi, `AppThemeMode`, dan paritas lokalisasi. |
+| `Code.gs` & `GoogleAppsScriptSnippet.kt` | Konektor Google Apps Script **v3.2** (2-way sync, `LockService`, tab `user`, `APP_API_TOKEN`). |
+| `firebase.json` / `firestore.indexes.json` / `firestore.rules` | Konfigurasi Firebase CLI, indeks komposit `notifications` & `findings`, serta Security Rules (RBAC + SoD). |
+| `app/src/test/java/com/example/ScaleFeaturesUnitTest.kt` | **21 unit tests** (SLA, CSV escape, RBAC/SoD, filter, L1 cap, TTL eviction safety, GAS v3.2, & paritas ID/EN). |
 
 ---
 

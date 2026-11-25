@@ -77,6 +77,23 @@ service cloud.firestore {
       );
     }
 
+    function isProjectAdminOrLead(projectId) {
+      let projDoc = get(/databases/$(database)/documents/projects/$(projectId));
+      return isAuthenticated() && projDoc.exists() && (
+        projDoc.data.ownerUid == request.auth.uid ||
+        (projDoc.data.roles is map &&
+         request.auth.uid in projDoc.data.roles &&
+         projDoc.data.roles[request.auth.uid] in ['HSSE Operations Lead', 'Lead HSE Inspector', 'ADMIN', 'OWNER'])
+      );
+    }
+
+    function isNotSelfPicClosure() {
+      let data = request.resource.data;
+      let notSameUid = !('picUid' in data) || data.picUid == '' || data.picUid != request.auth.uid;
+      let notSameEmail = !('email' in request.auth.token) || !('picEmail' in data) || data.picEmail == '' || data.picEmail != request.auth.token.email;
+      return notSameUid && notSameEmail;
+    }
+
     // ===============================================================
     // Domain Validators
     // ===============================================================
@@ -96,22 +113,38 @@ service cloud.firestore {
         (!('projectIds' in data) || (data.projectIds is list && data.projectIds.size() <= 50));
     }
 
+    function isValidInspectionWrite(projectId) {
+      let data = request.resource.data;
+      return data.keys().hasOnly([
+          'inspectionId', 'projectId', 'inspectorName', 'company', 'lsrCategories',
+          'userUid', 'userEmail', 'area', 'timestamp', 'updatedAt', 'dateFormatted',
+          'score', 'totalQuestions', 'answeredQuestions', 'yesCount', 'noCount',
+          'naCount', 'applicableModules', 'answers', 'answersJson', 'findings'
+        ]) &&
+        (!('projectId' in data) || data.projectId == projectId) &&
+        (!('score' in data) || (data.score is number && data.score >= 0 && data.score <= 100)) &&
+        (!('area' in data) || isValidString(data.area, 0, 200));
+    }
+
     function isValidFindingWrite(projectId) {
       let data = request.resource.data;
       return data.keys().hasOnly([
           'id', 'projectId', 'checklistCategory', 'questionText', 'description', 'location',
           'severity', 'status', 'creatorUid', 'creatorName', 'creatorEmail', 'creatorRole',
           'creatorCompany', 'picUid', 'picName', 'picEmail', 'picRole', 'picCompany', 'picPhotoURL',
-          'evidencePhotos', 'targetCompletionTimestamp', 'actionTaken', 'proofPhotos',
-          'actionSubmittedTimestamp', 'actionSubmittedByUid', 'verifiedTimestamp',
-          'verifiedByUid', 'verificationRemarks', 'picRating', 'createdAt', 'updatedAt'
+          'evidencePhotos', 'targetCompletionTimestamp', 'actionTaken', 'actionEvidenceNotes',
+          'proofPhotos', 'actionSubmittedTimestamp', 'actionSubmittedByUid', 'verifiedTimestamp',
+          'verifiedByUid', 'verificationRemarks', 'reopenReason', 'picRating', 'ruleId',
+          'createdAt', 'updatedAt'
         ]) &&
         (!('projectId' in data) || data.projectId == projectId) &&
         (!('status' in data) || data.status in ['OPEN', 'IN_PROGRESS', 'ACTION_SUBMITTED', 'IN_REVIEW', 'CLOSED', 'REJECTED', 'REOPENED']) &&
         (!('severity' in data) || data.severity in ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']) &&
         (!('description' in data) || isValidString(data.description, 0, 2000)) &&
         (!('actionTaken' in data) || isValidString(data.actionTaken, 0, 2000)) &&
+        (!('actionEvidenceNotes' in data) || isValidString(data.actionEvidenceNotes, 0, 2000)) &&
         (!('verificationRemarks' in data) || isValidString(data.verificationRemarks, 0, 2000)) &&
+        (!('reopenReason' in data) || isValidString(data.reopenReason, 0, 2000)) &&
         (!('picRating' in data) || (data.picRating is number && data.picRating >= 0 && data.picRating <= 5));
     }
 
@@ -166,14 +199,21 @@ service cloud.firestore {
       ) && request.resource.data.ownerUid == resource.data.ownerUid;
       allow delete: if isAuthenticated() && resource.data.ownerUid == request.auth.uid;
 
-      // Scoped Findings
+      // Scoped Inspection Records
+      match /inspections/{inspectionId} {
+        allow read: if isProjectMember(projectId);
+        allow create, update: if isProjectMember(projectId) && isValidInspectionWrite(projectId);
+        allow delete: if isProjectAdminOrLead(projectId);
+      }
+
+      // Scoped Findings (Segregation of Duties: assigned PIC cannot self-close)
       match /findings/{findingId} {
         allow read: if isProjectMember(projectId);
         allow create: if isProjectMember(projectId) && isValidFindingWrite(projectId);
         allow update: if isProjectMember(projectId) && isValidFindingWrite(projectId) &&
-          (!('createdAt' in resource.data) || request.resource.data.createdAt == resource.data.createdAt);
-        allow delete: if isAuthenticated() &&
-          get(/databases/$(database)/documents/projects/$(projectId)).data.ownerUid == request.auth.uid;
+          (!('createdAt' in resource.data) || request.resource.data.createdAt == resource.data.createdAt) &&
+          (request.resource.data.status != 'CLOSED' || isNotSelfPicClosure());
+        allow delete: if isProjectAdminOrLead(projectId);
 
         // Immutable Audit Trail & Direct Comments
         match /action_logs/{logId} {
@@ -192,6 +232,21 @@ service cloud.firestore {
           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isRead']);
         allow delete: if false;
       }
+    }
+
+    // Global Non-PII App Config (Only Admin custom claim can modify global webhook URL)
+    match /system/config {
+      allow read: if true;
+      allow write: if isAuthenticated() &&
+        request.auth.token.admin == true &&
+        request.resource.data.keys().hasOnly(['gasWebhookUrl', 'isGasEnabled', 'updatedBy', 'updatedAt']) &&
+        (!('gasWebhookUrl' in request.resource.data) || isValidString(request.resource.data.gasWebhookUrl, 0, 500));
+    }
+
+    // Authenticated connectivity ping check
+    match /system/ping {
+      allow read, write: if isAuthenticated() &&
+        request.resource.data.keys().hasOnly(['ping', 'user']);
     }
   }
 }

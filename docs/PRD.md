@@ -2,7 +2,7 @@
 
 ## Project Title: HSE Life-Saving Rules (LSR) Inspector
 **Classification**: Enterprise Safety Management & Field Audit System  
-**Baseline Version**: 2.0 (Centralized Navigation, Settings Hub & Live Firebase `lowerzakum-482af`)  
+**Baseline Version**: 2.2 (RBAC/SoD, GAS v3.2, Cursor-Based Pagination & Multi-Layer Smart Caching)  
 **Standard Compliance**: IOGP Report 459 / OSHA 1910 & 1926 Standards  
 **Application ID**: `com.lowerzakum.lsr`  
 **Maintainer**: Lower Zakum HSSE Operations Technology
@@ -38,10 +38,10 @@ Dalam industri berisiko tinggi seperti minyak & gas (*upstream/downstream*), per
 ## 3. Product Scope & Functional Requirements
 
 ### Module 1: Enterprise Gateway & Identity (`LoginGateScreen`)
-- **FR-1.1**: Autentikasi Kredensial nyata via Firebase Authentication (`lowerzakum-482af` Email/Password) yang tersinkronisasi otomatis ke koleksi Firestore `/users`.
-- **FR-1.2**: Daftar Akun Terdaftar real-time dari Cloud Firestore (tanpa data dummy bawaan; menampilkan status kosong saat belum ada akun terdaftar).
+- **FR-1.1**: Autentikasi Kredensial nyata via Firebase Authentication (`lowerzakum-482af` Email/Password) dan/atau Google Apps Script `user` sheet, dengan verifikasi kata sandi wajib (tanpa bypass login).
+- **FR-1.2**: Daftar Akun Terdaftar real-time dari Cloud Firestore / GAS (pemilihan akun hanya melakukan autofill email ke formulir masuk).
 - **FR-1.3**: Pendaftaran akun personil baru dengan atribut: Nama Lengkap, Email, Perusahaan, Jabatan, dan Sertifikasi K3 (NEBOSH/AK3/OSHA).
-- **FR-1.4**: Reset password instan via Firebase Auth email.
+- **FR-1.4**: Reset password instan via Firebase Auth email serta *Admin Database Setup Lock* (SHA-256 + lockout 30 detik setelah 5x salah) dengan sinkronisasi global `system/config`.
 - **FR-1.5**: Pengalih bahasa pra-login (ID 🇮🇩 / EN 🇬🇧) di gateway autentikasi.
 
 ### Module 2: Beranda & Workspace Management (`DashboardScreen`)
@@ -60,16 +60,16 @@ Dalam industri berisiko tinggi seperti minyak & gas (*upstream/downstream*), per
 - **FR-3.5**: Konfirmasi Selesai & Ringkasan Hasil sebelum penyimpanan permanen ke Room DB & Cloud.
 
 ### Module 4: Non-Conformance & Findings Engine (`FindingsScreen` & `FindingDetailScreen`)
-- **FR-4.1**: Pencatatan otomatis setiap jawaban "NO" menjadi item temuan K3.
-- **FR-4.2**: Klasifikasi aturan kritis (*Critical Hazard*), indikator **SLA otomatis** (24 jam Kritis / 72 jam Tinggi), serta pencarian & multi-filter (`Date`, `User`, `Type LSR`, `Company`, `Location`).
-- **FR-4.3**: Siklus Hidup Status Temuan: `OPEN` -> `ACTION_SUBMITTED / IN_REVIEW` -> `CLOSED` / `REOPENED`.
+- **FR-4.1**: Pencatatan otomatis setiap jawaban "NO" menjadi item temuan K3, ditampilkan via **Infinite Scroll Cursor-Based Pagination** (batch `25` item, prefetching **75%**, skeleton loader, & retry footer tahan error).
+- **FR-4.2**: Klasifikasi aturan kritis (*Critical Hazard*), indikator **SLA otomatis** (24 jam Kritis / 72 jam Tinggi), serta pencarian debounced (300ms) & multi-filter (`Date`, `User`, `Type LSR`, `Company`, `Location`).
+- **FR-4.3**: Siklus Hidup Status Temuan: `OPEN` -> `ACTION_SUBMITTED / IN_REVIEW` -> `CLOSED` / `REOPENED` dengan penegakan **RBAC & Segregation of Duties** (PIC dilarang menutup temuannya sendiri).
 - **FR-4.4**: Penugasan PIC, lampiran foto bukti lapangan (`EvidencePhotoHelper`), pengajuan tindakan korektif, serta verifikasi & rating kepuasan auditor (1–5 bintang).
 - **FR-4.5**: **Komunikasi & Pengingat Langsung Lintas Pengguna**: Mengirim pesan chat (`COMMENT`) dan *push reminder* (`REMINDER_PING`) ke PIC/Auditor yang tersinkronisasi real-time lewat Firestore & FCM.
-- **FR-4.6**: **Ekspor Laporan**: Ekspor PDF A4 per audit dan ekspor batch CSV temuan via `FileProvider`.
+- **FR-4.6**: **Ekspor Laporan**: Ekspor PDF A4 per audit dan ekspor batch CSV temuan (dengan proteksi *formula injection*) via `FileProvider`.
 
 ### Module 5: Aktivitas & Riwayat Audit (`FeedScreen`)
 - **FR-5.1**: Sub-tab **Notifikasi & Alert** untuk pemberitahuan tugas PIC, verifikasi, pesan langsung, dan pengingat real-time dengan lencana (*badge*) belum dibaca & deduplikasi `remoteId`.
-- **FR-5.2**: Sub-tab **Aktivitas / Laporan Audit** untuk riwayat inspeksi dengan paginasi, pengelompokan tanggal (`Hari Ini` / `Minggu Ini` / `Sebelumnya`), dan banner antrean sinkronisasi offline (*Sync Now*).
+- **FR-5.2**: Sub-tab **Aktivitas / Laporan Audit** untuk riwayat inspeksi dengan **cursor pagination** `(timestamp, id)` (75% prefetching), pengelompokan tanggal (`Hari Ini` / `Minggu Ini` / `Sebelumnya`), dan banner antrean sinkronisasi offline (*Sync Now*).
 - **FR-5.3**: **Sleek Search & Multi-Dimensional Filter (`ActivityFilterBottomSheet`)**: Pencarian teks + penyaringan berdasarkan Rentang Tanggal, Pengguna, Tipe LSR, Perusahaan, dan Lokasi.
 
 ### Module 6: Centralized Settings Hub (`SettingsScreen` & `ProfileScreen`)
@@ -99,7 +99,7 @@ Inspeksi mencakup **7 modul aktif (42 aturan)** berbasis standar internasional I
 
 ## 5. Non-Functional Requirements (NFR)
 
-- **Performance**: Waktu rendering antar layar `< 16ms` (60fps mulus pada Compose). Cold startup `< 1.5 detik`, dilengkapi `PersistentCacheSettings` 100 MB untuk load Feed instan.
-- **Offline Reliability**: 100% fungsionalitas inspeksi, penyimpanan draf, dan antrean outbox `WorkManager` berjalan tanpa internet.
-- **Data Integrity**: Menggunakan SQLite Room v5 ACID transaction (`MIGRATION_4_5`) untuk mencegah inkonsistensi saat crash.
+- **Performance & Memory Safety**: Waktu rendering antar layar `< 16ms` (60/120fps mulus pada Compose), tampil instan `< 100ms` dari Room L2 (`AppDatabase` v6), batas memori L1 maks. `250` item aktif + `LruCache(200)` detail, dan `PersistentCacheSettings` 100 MB.
+- **Offline Reliability & Smart Cache Eviction**: 100% fungsionalitas inspeksi, penyimpanan draf, dan antrean outbox `WorkManager` (`SyncWorker`) berjalan tanpa internet; `CacheEvictionWorker` memangkas temuan `CLOSED` tersinkronisasi > 7 hari, notifikasi dibaca > 30 hari, dan cache foto > 50 MB secara aman.
+- **Data Integrity**: Menggunakan SQLite Room **v6** ACID transaction (`MIGRATION_3_4`, `MIGRATION_4_5`, `MIGRATION_5_6` non-destruktif) untuk mencegah inkonsistensi atau kehilangan data saat crash.
 - **Accessibility**: Mendukung ukuran teks dinamis, rasio kontras warna min **4.5:1 (WCAG AA)** di mode terang & gelap obsidian, dan target sentuh min **48x48dp**.

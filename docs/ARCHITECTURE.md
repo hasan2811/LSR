@@ -69,17 +69,17 @@ flowchart TD
 
 ### 2.3 Data Layer (`com.example.data`)
 
-#### A. Database Lokal (Room v5)
-- **`AppDatabase`**: SQLite Database terkelola Room (`version = 5`) dengan `MIGRATION_3_4` dan `MIGRATION_4_5` non-destruktif (`company`, `lsrCategories`, `remoteId`, `senderName`).
+#### A. Database Lokal (Room v6)
+- **`AppDatabase`**: SQLite Database terkelola Room (`version = 6`) dengan `MIGRATION_3_4`, `MIGRATION_4_5`, dan `MIGRATION_5_6` non-destruktif (`company`, `lsrCategories`, `remoteId`, `senderName`, `remoteDocId`, `updatedAt`, `cachedAt`, serta 10 indeks komposit untuk query keyset cursor dan TTL eviction).
 - **Entitas & Proyeksi Utama**:
   1. `ActiveAnswer`: Menyimpan status draf aktif per pertanyaan (`questionId`, `answer`, `notes`, `assignedPicName`, `updatedAt`).
-  2. `InspectionRecord` & `InspectionSummary`: Menyimpan arsip audit serta proyeksi ringan (*summary projection*) termasuk `company` & `lsrCategories` tanpa beban `answersJson` untuk paginasi dan multi-filter Feed berkecepatan tinggi.
-  3. `FindingItem`: Menyimpan data temuan ketidaksesuaian K3 (`projectId`, `company`, `evidencePhotoUri`, `evidencePhotoUrl`, status, PIC, dan kalkulasi SLA otomatis 24 jam Kritis / 72 jam Tinggi).
+  2. `InspectionRecord` & `InspectionSummary`: Menyimpan arsip audit serta proyeksi ringan (*summary projection*) termasuk `company` & `lsrCategories` tanpa beban `answersJson` untuk paginasi keyset cursor `(timestamp, id)` dan multi-filter Feed berkecepatan tinggi.
+  3. `FindingItem`: Menyimpan data temuan ketidaksesuaian K3 (`projectId`, `company`, `remoteDocId`, `evidencePhotoUri`, `evidencePhotoUrl`, `updatedAt`, `cachedAt`, status, PIC, dan kalkulasi SLA otomatis 24 jam Kritis / 72 jam Tinggi).
   4. `AppNotification`: Menyimpan riwayat alert & pesan/pengingat lintas pengguna dengan deduplikasi `remoteId` dan kebijakan retensi otomatis (*auto-purge* notifikasi dibaca > 30 hari).
   5. `CustomChecklistStore`: Menyimpan aturan K3 tambahan yang dibuat oleh pengguna.
 
-#### B. Background Sync, Foto Bukti & Ekspor (`SyncWorker`, `EvidencePhotoHelper`, `ReportExporter`)
-- **`SyncWorker` & `DraftReminderWorker`** (WorkManager): Mengirim antrean outbox (`isSynced = 0`) + foto bukti ke Cloud Firestore & Firebase Storage secara otomatis saat jaringan tersedia (*exponential backoff*), serta pengingat draf aktif tiap 12 jam.
+#### B. Background Sync, Cache Eviction, Foto Bukti & Ekspor (`SyncWorker`, `CacheEvictionWorker`, `EvidencePhotoHelper`, `ReportExporter`)
+- **`SyncWorker`, `DraftReminderWorker` & `CacheEvictionWorker`** (WorkManager): Mengirim antrean outbox (`isSynced = 0`) + foto bukti ke Cloud Firestore & Firebase Storage secara otomatis saat jaringan tersedia (*exponential backoff*), pengingat draf aktif tiap 12 jam, serta pemangkasan cache TTL tiap 24 jam (temuan `CLOSED` tersinkronisasi > 7 hari, notifikasi dibaca > 30 hari, cache foto > 50 MB sambil melindungi foto aktif/belum sinkron).
 - **`LsrMessagingService` & `NotificationHelper`**: Menangani push notification FCM (`lsr_alerts`, `lsr_reminders`) dengan preferensi per-kategori, sinkronisasi FCM token ke `users/{uid}`, dan izin runtime Android 13+.
 - **`EvidencePhotoHelper`**: Mengompresi foto bukti lapangan hingga maks. 1280px (~100–200 KB JPEG) dan mengunggahnya ke Firebase Storage (`evidence/{findingId}/`).
 - **`ReportExporter`**: Menghasilkan laporan PDF A4 (`PdfDocument`) per inspeksi serta ekspor batch CSV via `FileProvider`.

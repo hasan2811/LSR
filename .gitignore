@@ -51,9 +51,10 @@ local.properties
 /.idea/shelf/
 
 # ==========================================
-# OS & Temp Files
+# OS, Temp & Local AI Plugin Cache
 # ==========================================
 .DS_Store
 Thumbs.db
 *.swp
 *.swo
+.skills/

@@ -14,6 +14,24 @@ object AppStrings {
         return langMap[key] ?: enStrings[key] ?: key
     }
 
+    fun formatRelativeSync(timestampMs: Long, language: AppLanguage): String {
+        val isId = language == AppLanguage.ID
+        if (timestampMs <= 0L) return if (isId) "Siap Sinkron" else "Ready to Sync"
+        val diffMin = ((System.currentTimeMillis() - timestampMs).coerceAtLeast(0L)) / 60_000L
+        return when {
+            diffMin < 1L -> if (isId) "Baru saja" else "Just now"
+            diffMin < 60L -> if (isId) "${diffMin}m lalu" else "${diffMin}m ago"
+            diffMin < 1440L -> {
+                val hrs = diffMin / 60L
+                if (isId) "${hrs}j lalu" else "${hrs}h ago"
+            }
+            else -> {
+                val days = diffMin / 1440L
+                if (isId) "${days}h lalu" else "${days}d ago"
+            }
+        }
+    }
+
     private val idStrings = mapOf(
         // App Bar & Branding
         "app_title" to "HSE LSR Inspector",
@@ -314,7 +332,17 @@ object AppStrings {
         "theme_mode_title" to "Tampilan Tema",
         "theme_system" to "Sistem",
         "theme_light" to "Terang",
-        "theme_dark" to "Gelap"
+        "theme_dark" to "Gelap",
+        "sync_state_syncing" to "Menyinkronkan Cloud & Sheets...",
+        "sync_state_instant" to "Cache Instan Aktif • Tersinkron",
+        "sync_pull_gas_btn" to "Tarik Data Sheets (doGet)",
+        "sync_last_at" to "Terakhir sinkron",
+        "paging_loading_more" to "Memuat data berikutnya...",
+        "paging_retry_btn" to "Coba Lagi",
+        "paging_end_findings" to "Semua temuan telah dimuat",
+        "paging_end_feed" to "Semua aktivitas telah dimuat",
+        "paging_end_notifications" to "Semua notifikasi telah dimuat",
+        "paging_error_append" to "Koneksi terganggu saat memuat halaman berikutnya"
     )
 
     private val enStrings = mapOf(
@@ -617,6 +645,16 @@ object AppStrings {
         "theme_mode_title" to "App Theme",
         "theme_system" to "System",
         "theme_light" to "Light",
-        "theme_dark" to "Dark"
+        "theme_dark" to "Dark",
+        "sync_state_syncing" to "Syncing Cloud & Sheets...",
+        "sync_state_instant" to "Instant Cache Active • Synced",
+        "sync_pull_gas_btn" to "Pull Sheets Data (doGet)",
+        "sync_last_at" to "Last synced",
+        "paging_loading_more" to "Loading more items...",
+        "paging_retry_btn" to "Retry",
+        "paging_end_findings" to "All findings loaded",
+        "paging_end_feed" to "All activities loaded",
+        "paging_end_notifications" to "All notifications loaded",
+        "paging_error_append" to "Network error while loading next page"
     )
 }

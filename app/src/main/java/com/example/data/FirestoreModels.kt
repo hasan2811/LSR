@@ -52,6 +52,7 @@ data class FirestoreProject(
 data class FirestoreFindingDocument(
     val id: String = "",
     val projectId: String = "",
+    val ruleId: String = "",
     val checklistCategory: String = "",
     val questionText: String = "",
     val description: String = "",
@@ -80,6 +81,7 @@ data class FirestoreFindingDocument(
 
     // PIC Corrective Action
     val actionTaken: String = "",
+    val actionEvidenceNotes: String = "",
     val proofPhotos: List<String> = emptyList(),
     val actionSubmittedTimestamp: Long = 0L,
     val actionSubmittedByUid: String = "",
@@ -88,6 +90,7 @@ data class FirestoreFindingDocument(
     val verifiedTimestamp: Long = 0L,
     val verifiedByUid: String = "",
     val verificationRemarks: String = "",
+    val reopenReason: String = "",
     val picRating: Int = 0, // 1 - 5 stars
 
     val createdAt: Long = System.currentTimeMillis(),
@@ -141,4 +144,11 @@ enum class DashboardPerspective(val titleEn: String, val titleId: String) {
     INSPECTOR_VERIFY("Auditor Verification", "Verifikasi Auditor"),
     HIGH_RISK("Critical Risks", "Risiko Kritis")
 }
+
+data class GasRemoteConfig(
+    val webhookUrl: String = "",
+    val isGasEnabled: Boolean = true,
+    val updatedBy: String = "",
+    val updatedAt: Long = 0L
+)
 

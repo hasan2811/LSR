@@ -36,6 +36,9 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextStyle
@@ -63,7 +66,20 @@ fun LsrInspectionApp(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     val snackbarHostState = remember { SnackbarHostState() }
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_RESUME -> viewModel.onAppForegroundChanged(true)
+                Lifecycle.Event.ON_PAUSE -> viewModel.onAppForegroundChanged(false)
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     val appLanguage by viewModel.appLanguage.collectAsState()
     val checklistItems by viewModel.checklistItems.collectAsState()
@@ -89,6 +105,7 @@ fun LsrInspectionApp(
     val inspectorCert by viewModel.inspectorCert.collectAsState()
     val scriptUrl by viewModel.scriptUrl.collectAsState()
     val isGasEnabled by viewModel.isGasEnabled.collectAsState()
+    val isDatabaseAdminUnlocked by viewModel.isDatabaseAdminUnlocked.collectAsState()
     val firebaseUrl by viewModel.firebaseUrl.collectAsState()
     val isFirebaseEnabled by viewModel.isFirebaseEnabled.collectAsState()
     val currentTab by viewModel.currentTab.collectAsState()
@@ -106,9 +123,13 @@ fun LsrInspectionApp(
     val totalNotificationsCount by viewModel.totalNotificationsCount.collectAsState()
     val pendingSyncCount by viewModel.pendingSyncCount.collectAsState()
     val isRefreshing by viewModel.isRefreshing.collectAsState()
+    val isCloudSyncing by viewModel.isCloudSyncing.collectAsState()
+    val lastCloudSyncAt by viewModel.lastCloudSyncAt.collectAsState()
     val appThemeMode by viewModel.appThemeMode.collectAsState()
     val feedFilterCriteria by viewModel.feedFilterCriteria.collectAsState()
     val findingsFilterCriteria by viewModel.findingsFilterCriteria.collectAsState()
+    val pagedFindingsState by viewModel.pagedFindingsState.collectAsState()
+    val pagedFeedState by viewModel.pagedFeedState.collectAsState()
 
     // Firebase Auth states
     val currentUser by viewModel.currentUser.collectAsState()
@@ -164,9 +185,6 @@ fun LsrInspectionApp(
             onLogin = { email, pass ->
                 viewModel.login(email, pass)
             },
-            onQuickLogin = { selectedUser ->
-                viewModel.loginWithFirestoreUser(selectedUser)
-            },
             onRegister = { email, pass, name, comp, role, cert ->
                 viewModel.register(email, pass, name, comp, role, cert)
             },
@@ -178,6 +196,13 @@ fun LsrInspectionApp(
             },
             onToggleLanguage = {
                 viewModel.toggleLanguage()
+            },
+            scriptUrl = scriptUrl,
+            isGasEnabled = isGasEnabled,
+            isDatabaseAdminUnlocked = isDatabaseAdminUnlocked,
+            onUnlockDatabaseAdmin = { pass -> viewModel.unlockDatabaseAdmin(pass) },
+            onSaveAndTestDatabaseSetup = { adminPass, newUrl, gasEn, pubGlobal, onRes ->
+                viewModel.saveAndTestDatabaseSetupFromLogin(adminPass, newUrl, gasEn, pubGlobal, onRes)
             }
         )
         return
@@ -442,7 +467,10 @@ fun LsrInspectionApp(
                                     },
                                     onStartClicked = { viewModel.startInspection() },
                                     onResetDraftClicked = { viewModel.resetDraft() },
-                                    onNavigateToTab = { targetTab -> viewModel.selectTab(targetTab) }
+                                    onNavigateToTab = { targetTab -> viewModel.selectTab(targetTab) },
+                                    isCloudSyncing = isCloudSyncing,
+                                    lastCloudSyncAt = lastCloudSyncAt,
+                                    onSyncNow = { viewModel.refreshAllData() }
                                 )
                             }
                             AppNavTab.FEED -> {
@@ -486,7 +514,10 @@ fun LsrInspectionApp(
                                     },
                                     onMarkNotificationRead = { id -> viewModel.markNotificationRead(id) },
                                     onMarkAllNotificationsRead = { viewModel.markAllNotificationsRead() },
-                                    onDeleteReadNotifications = { viewModel.deleteReadNotifications() }
+                                    onDeleteReadNotifications = { viewModel.deleteReadNotifications() },
+                                    isCloudSyncing = isCloudSyncing,
+                                    lastCloudSyncAt = lastCloudSyncAt,
+                                    pagedFeedState = pagedFeedState
                                 )
                             }
                             AppNavTab.FINDINGS -> {
@@ -537,7 +568,15 @@ fun LsrInspectionApp(
                                     },
                                     onDeleteFinding = { id ->
                                         viewModel.deleteFinding(id)
-                                    }
+                                    },
+                                    canManageFinding = { finding ->
+                                        viewModel.canManageOrVerifyFinding(finding)
+                                    },
+                                    pagedState = pagedFindingsState,
+                                    onPagedSearchChanged = { q -> viewModel.onFindingsSearchChanged(q) },
+                                    onPagedFilterChanged = { status -> viewModel.onFindingsFilterTabChanged(status) },
+                                    onLoadNextPage = { viewModel.loadNextFindingsPage() },
+                                    onRetryAppend = { viewModel.retryFindingsAppend() }
                                 )
                             }
                             AppNavTab.SETTINGS -> {
@@ -566,6 +605,8 @@ fun LsrInspectionApp(
                                     hapticFeedbackEnabled = hapticFeedbackEnabled,
                                     pendingSyncCount = pendingSyncCount,
                                     onRetryPendingSync = { viewModel.retryPendingSync() },
+                                    isCloudSyncing = isCloudSyncing,
+                                    lastCloudSyncAt = lastCloudSyncAt,
                                     themeMode = appThemeMode,
                                     onThemeModeChange = { viewModel.setAppThemeMode(it) },
                                     onToggleNotifPic = { viewModel.setNotifPicAlerts(it) },
@@ -576,9 +617,12 @@ fun LsrInspectionApp(
                                     onSaveProfile = { comp, role, cert ->
                                         viewModel.saveProfileDetails(comp, role, cert)
                                     },
-                                    onSaveCloudSettings = { sUrl, gEn, fUrl, fEn ->
-                                        viewModel.saveCloudSettings(sUrl, gEn, fUrl, fEn)
+                                    onSaveCloudSettings = { sUrl, gEn, fUrl, fEn, pubGlobal ->
+                                        viewModel.saveCloudSettings(sUrl, gEn, fUrl, fEn, pubGlobal)
                                     },
+                                    isDatabaseAdminUnlocked = isDatabaseAdminUnlocked,
+                                    onUnlockDatabaseAdmin = { pass -> viewModel.unlockDatabaseAdmin(pass) },
+                                    onLockDatabaseAdmin = { viewModel.lockDatabaseAdmin() },
                                     onTestGas = { viewModel.testGasConnection() },
                                     onTestFirebase = { viewModel.testFirebaseConnection() },
                                     onRefreshCloud = { viewModel.refreshFirestoreData() },
@@ -670,11 +714,14 @@ fun LsrInspectionApp(
             unansweredCount = unansweredCount,
             totalCount = totalCount,
             scriptUrl = scriptUrl,
+            isSubmitting = isSubmitting,
             onSubmit = {
                 showSubmitConfirmationDialog = false
                 viewModel.submitReport()
             },
-            onDismiss = { showSubmitConfirmationDialog = false }
+            onDismiss = {
+                if (!isSubmitting) showSubmitConfirmationDialog = false
+            }
         )
     }
 
@@ -1714,10 +1761,11 @@ fun SubmitConfirmationDialog(
     unansweredCount: Int,
     totalCount: Int,
     scriptUrl: String,
+    isSubmitting: Boolean = false,
     onSubmit: () -> Unit,
     onDismiss: () -> Unit
 ) {
-    Dialog(onDismissRequest = onDismiss) {
+    Dialog(onDismissRequest = { if (!isSubmitting) onDismiss() }) {
         Card(
             shape = RoundedCornerShape(24.dp),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -1785,12 +1833,16 @@ fun SubmitConfirmationDialog(
                     horizontalArrangement = Arrangement.End,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    TextButton(onClick = onDismiss) {
+                    TextButton(
+                        onClick = onDismiss,
+                        enabled = !isSubmitting
+                    ) {
                         Text(AppStrings.get("cancel_btn", language))
                     }
                     Spacer(modifier = Modifier.width(8.dp))
                     Button(
                         onClick = onSubmit,
+                        enabled = !isSubmitting,
                         colors = ButtonDefaults.buttonColors(containerColor = SafetyTeal),
                         shape = RoundedCornerShape(14.dp)
                     ) {

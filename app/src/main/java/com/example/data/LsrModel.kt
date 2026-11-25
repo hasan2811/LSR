@@ -1,6 +1,7 @@
 package com.example.data
 
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 import androidx.room.TypeConverter
 import com.squareup.moshi.Moshi
@@ -39,7 +40,14 @@ data class ActiveAnswer(
     val updatedAt: Long = System.currentTimeMillis()
 )
 
-@Entity(tableName = "inspection_records")
+@Entity(
+    tableName = "inspection_records",
+    indices = [
+        Index(value = ["timestamp", "id"], name = "idx_inspection_cursor"),
+        Index(value = ["projectId", "timestamp", "id"], name = "idx_inspection_proj_cursor"),
+        Index(value = ["isSynced", "timestamp"], name = "idx_inspection_sync")
+    ]
+)
 data class InspectionRecord(
     @PrimaryKey(autoGenerate = true) val id: Int = 0,
     val inspectorName: String,
@@ -79,7 +87,16 @@ data class AnswerData(
     val assignedPicRole: String = ""
 )
 
-@Entity(tableName = "finding_items")
+@Entity(
+    tableName = "finding_items",
+    indices = [
+        Index(value = ["projectId", "timestamp", "id"], name = "idx_finding_cursor_proj"),
+        Index(value = ["status", "timestamp", "id"], name = "idx_finding_status_cursor"),
+        Index(value = ["isSynced", "cachedAt"], name = "idx_finding_sync_ttl"),
+        Index(value = ["updatedAt"], name = "idx_finding_updated_at"),
+        Index(value = ["remoteDocId"], name = "idx_finding_remote_doc_id")
+    ]
+)
 data class FindingItem(
     @PrimaryKey(autoGenerate = true) val id: Int = 0,
     val inspectionRecordId: Int = 0,
@@ -117,7 +134,10 @@ data class FindingItem(
     val projectId: String = "",
     val evidencePhotoUri: String = "",
     val evidencePhotoUrl: String = "",
-    val company: String = ""
+    val company: String = "",
+    val remoteDocId: String = "",
+    val updatedAt: Long = System.currentTimeMillis(),
+    val cachedAt: Long = System.currentTimeMillis()
 ) {
     fun slaDeadlineTimestamp(): Long = timestamp + (if (isCritical) 24L else 72L) * 3_600_000L
 
@@ -145,7 +165,13 @@ data class ActionHistoryLog(
     val isSynced: Boolean = false
 )
 
-@Entity(tableName = "app_notifications")
+@Entity(
+    tableName = "app_notifications",
+    indices = [
+        Index(value = ["timestamp", "id"], name = "idx_notif_cursor"),
+        Index(value = ["isRead", "timestamp"], name = "idx_notif_read_ttl")
+    ]
+)
 data class AppNotification(
     @PrimaryKey(autoGenerate = true) val id: Int = 0,
     val recipientEmail: String = "",
@@ -160,6 +186,17 @@ data class AppNotification(
     val isSynced: Boolean = false,
     val remoteId: String = "",
     val senderName: String = ""
+)
+
+data class FindingCursor(
+    val lastTimestamp: Long,
+    val lastId: Int,
+    val lastRemoteDocId: String = ""
+)
+
+data class KeysetCursor(
+    val lastTimestamp: Long,
+    val lastId: Int
 )
 
 enum class DateRangeFilter {

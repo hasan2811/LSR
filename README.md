@@ -17,9 +17,13 @@ Untuk mempermudah pemahaman arsitektur, kepatuhan, dan panduan kontribusi bagi p
 
 | Dokumen | Deskripsi |
 | :--- | :--- |
+| 🧠 [**Project Context & Handover Snapshot**](docs/PROJECT_CONTEXT.md) | **Baca pertama kali** saat lanjut *vibecoding*: ringkasan baseline, fitur aktif, gotchas, & prompt sesi baru. |
+| 📐 [**Architecture & Business Rules**](docs/ARCHITECTURE_AND_RULES.md) | *Single Source of Truth*: state sistem terkini, skema Firestore/GAS v3.2, matriks RBAC + SoD, & roadmap. |
+| 📝 [**Changelog (v2.1.0)**](CHANGELOG.md) | Riwayat rilis terstruktur, perbaikan keamanan, RBAC, dan stabilitas sync. |
 | 📘 [**Product Requirements Document (PRD)**](docs/PRD.md) | Visi produk, persona pengguna, cakupan 42 audit rules IOGP/OSHA, alur kerja inspeksi, dan KPI. |
 | 🏛️ [**System Architecture & Technical Design**](docs/ARCHITECTURE.md) | Arsitektur data MVI/MVVM, Room DB, Dual-Pipe Sync Engine, skema Firestore, dan visualisasi alur data. |
-| 🛡️ [**Permissions, Authority & Security Matrix**](docs/PERMISSIONS_AND_SECURITY.md) | Matriks hak akses (RBAC), aturan keamanan Firestore, izin runtime Android, dan integritas data. |
+| 📊 [**Google Apps Script Blueprint (v3.2)**](docs/APPS_SCRIPT_BLUEPRINT.md) | Blueprint integrasi Sheets dua arah: `LockService`, 25s mutation lock, auth tab `user`, `APP_API_TOKEN`, & deployment. |
+| 🛡️ [**Permissions, Authority & Security Matrix**](docs/PERMISSIONS_AND_SECURITY.md) | Matriks hak akses (RBAC & Segregation of Duties), aturan Firestore, CSV & backup hardening. |
 | 🤖 [**AI Development & Vibecoding Guide**](docs/AI_DEVELOPMENT_GUIDE.md) | Panduan komprehensif bagi AI Agent & Developer, aturan Ponytail YAGNI, indeks file kode, dan resep implementasi. |
 | ⚡ [**AI Agents Ruleset**](AGENTS.md) | Aturan operasional global untuk coding assistant (Claude, Antigravity, Cursor). |
 
@@ -27,7 +31,7 @@ Untuk mempermudah pemahaman arsitektur, kepatuhan, dan panduan kontribusi bagi p
 
 ## 🚀 Fitur Utama
 
-- **Offline-First Resilience & Outbox Queue**: Data audit tersimpan aman di database lokal Room (`AppDatabase` v5) dengan dukungan penyimpanan draf otomatis, antrean outbox `WorkManager` (`SyncWorker`), dan *100 MB Persistent Cache* Firestore (*zero data loss*).
+- **Offline-First Resilience & Multi-Layer Smart Cache**: Data audit tersimpan aman di database lokal Room (`AppDatabase` v6, migrasi non-destruktif) dengan *L1 bounded window (`250`) + `LruCache(200)`*, **cursor-based infinite scroll** (batch `25` + 75% prefetching), outbox `WorkManager` (`SyncWorker`, `CacheEvictionWorker` TTL 7 hari/50 MB), dan *100 MB Persistent Cache* Firestore.
 - **Dual-Pipeline Cloud Synchronization**:
   1. *Firebase Auth, Cloud Firestore & Storage (`lowerzakum-482af`)*: Autentikasi terverifikasi, multi-tenant workspace proyek (`Lower Zakum Offshore Operations`), sinkronisasi foto bukti lapangan terkompresi, dan live stream tanpa data dummy.
   2. *Google Apps Script Enterprise Connector*: Ekspor data inspeksi otomatis ke Google Sheets & spreadsheet korporat.
@@ -90,7 +94,7 @@ LSR/
 │       │   ├── AndroidManifest.xml # Izin & deklarasi activity/service/FileProvider
 │       │   └── java/com/example/
 │       │       ├── MainActivity.kt # Entry point activity & tema (AppThemeMode)
-│       │       ├── data/           # Layer Data (Room v5, Firestore, Auth, FCM, Sync, Export)
+│       │       ├── data/           # Layer Data (Room v6, Firestore, Auth, FCM, Sync, Export)
 │       │       │   ├── AppDatabase.kt
 │       │       │   ├── AppLanguage.kt
 │       │       │   ├── CustomChecklistStore.kt
@@ -121,8 +125,10 @@ LSR/
 │       │           │   └── ProfileScreen.kt  # Sub-halaman Profil & Akun Inspektur
 │       │           └── theme/              # Design System M3 (Color, Theme, Type)
 │       └── test/java/com/example/
-│           └── ScaleFeaturesUnitTest.kt    # Unit test SLA, CSV, Filter, Theme & Localization
-├── docs/                           # Dokumentasi Arsitektur, PRD, dan Security
+│           └── ScaleFeaturesUnitTest.kt    # 21 unit tests (SLA, CSV, RBAC/SoD, Filter, L1 cap, TTL safety, GAS v3.2)
+├── CHANGELOG.md                    # Riwayat versi & audit keamanan rilis
+├── Code.gs                         # Script Google Apps Script v3.2 siap deploy ke Google Sheets
+├── docs/                           # Dokumentasi Arsitektur, Rules, PRD, dan Security
 ├── AGENTS.md                       # Ruleset AI vibecoding & Ponytail YAGNI
 └── gradle/                         # Wrapper & Version Catalog (libs.versions.toml)
 ```

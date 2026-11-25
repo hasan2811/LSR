@@ -24,6 +24,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import android.content.ClipboardManager
+import android.content.Context
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -49,11 +52,21 @@ fun LoginGateScreen(
     firestoreUsers: List<FirestoreUser>,
     firestoreProjects: List<FirestoreProject>,
     onLogin: (email: String, pass: String) -> Unit,
-    onQuickLogin: (FirestoreUser) -> Unit,
     onRegister: (email: String, pass: String, name: String, company: String, role: String, cert: String) -> Unit,
     onResetPassword: (email: String) -> Unit,
     onClearError: () -> Unit,
     onToggleLanguage: () -> Unit,
+    scriptUrl: String = GoogleAppsScriptSnippet.DEFAULT_WEBHOOK_URL,
+    isGasEnabled: Boolean = true,
+    isDatabaseAdminUnlocked: Boolean = false,
+    onUnlockDatabaseAdmin: (String) -> Boolean = { false },
+    onSaveAndTestDatabaseSetup: (
+        adminPassword: String,
+        newScriptUrl: String,
+        gasEnabled: Boolean,
+        publishGlobal: Boolean,
+        onResult: (Boolean, String) -> Unit
+    ) -> Unit = { _, _, _, _, onRes -> onRes(false, "Not configured") },
     modifier: Modifier = Modifier
 ) {
     var activeGateTab by remember { mutableIntStateOf(0) } // 0: Masuk, 1: Pilih Akun Firestore, 2: Daftar Baru
@@ -63,6 +76,7 @@ fun LoginGateScreen(
     var emailInput by remember { mutableStateOf("") }
     var passwordInput by remember { mutableStateOf("") }
     var isPasswordVisible by remember { mutableStateOf(false) }
+    var selectedAccountHint by remember { mutableStateOf<String?>(null) }
 
     // Sign up form state
     var regName by remember { mutableStateOf("") }
@@ -75,6 +89,7 @@ fun LoginGateScreen(
 
     var showForgotDialog by remember { mutableStateOf(false) }
     var forgotEmail by remember { mutableStateOf("") }
+    var showDatabaseSetupDialog by remember { mutableStateOf(false) }
     var validationError by remember { mutableStateOf<String?>(null) }
 
     val isId = language == AppLanguage.ID
@@ -337,9 +352,29 @@ fun LoginGateScreen(
                                 color = Color.White
                             )
 
+                            if (!selectedAccountHint.isNullOrBlank()) {
+                                Surface(
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = SafetyTeal.copy(alpha = 0.14f),
+                                    border = BorderStroke(1.dp, SafetyTeal.copy(alpha = 0.4f)),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text(
+                                        text = selectedAccountHint!!,
+                                        fontSize = 11.sp,
+                                        color = SafetyTeal,
+                                        fontWeight = FontWeight.SemiBold,
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                                    )
+                                }
+                            }
+
                             OutlinedTextField(
                                 value = emailInput,
-                                onValueChange = { emailInput = it },
+                                onValueChange = {
+                                    emailInput = it
+                                    selectedAccountHint = null
+                                },
                                 label = { Text(if (isId) "Alamat Email K3" else "Email Address") },
                                 leadingIcon = {
                                     Icon(Icons.Default.Email, contentDescription = null, tint = SafetyBlue)
@@ -463,18 +498,18 @@ fun LoginGateScreen(
                         }
 
                         1 -> {
-                            // SELECT REGISTERED USER FROM FIRESTORE
+                            // SELECT REGISTERED USER FROM DIRECTORY (Autofill Email -> Require Password)
                             Text(
-                                text = if (isId) "Daftar User Firestore (Koleksi 'users')" else "Firestore Users Directory ('users' collection)",
+                                text = if (isId) "Direktori Personil K3 Terdaftar" else "Registered HSE Personnel Directory",
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold,
                                 color = Color.White
                             )
                             Text(
                                 text = if (isId)
-                                    "Pilih salah satu personil di bawah untuk langsung masuk sesuai izin proyek Firestore:"
+                                    "Pilih personil di bawah untuk mengisi email secara otomatis, lalu masukkan kata sandi di tab Masuk:"
                                 else
-                                    "Select any registered personnel below to immediately enter their authorized projects:",
+                                    "Select personnel below to autofill their email, then enter your password in the Sign In tab:",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = Color.White.copy(alpha = 0.7f)
                             )
@@ -524,6 +559,18 @@ fun LoginGateScreen(
                                 }
                             } else {
                                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    val selectAccountAction: (FirestoreUser) -> Unit = { user ->
+                                        emailInput = user.email
+                                        passwordInput = ""
+                                        validationError = null
+                                        onClearError()
+                                        selectedAccountHint = if (isId) {
+                                            "Akun ${user.displayName} (${user.email}) dipilih. Masukkan kata sandi untuk melanjutkan."
+                                        } else {
+                                            "Selected ${user.displayName} (${user.email}). Enter your password to continue."
+                                        }
+                                        activeGateTab = 0
+                                    }
                                     firestoreUsers.forEach { user ->
                                         val initial = if (user.displayName.isNotBlank()) user.displayName.take(2).uppercase() else "US"
                                         Surface(
@@ -533,7 +580,7 @@ fun LoginGateScreen(
                                             modifier = Modifier
                                                 .fillMaxWidth()
                                                 .clickable {
-                                                    onQuickLogin(user)
+                                                    selectAccountAction(user)
                                                 }
                                         ) {
                                             Row(
@@ -582,9 +629,8 @@ fun LoginGateScreen(
                                                         )
                                                     }
                                                 }
-
                                                 FilledTonalButton(
-                                                    onClick = { onQuickLogin(user) },
+                                                    onClick = { selectAccountAction(user) },
                                                     contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
                                                     shape = RoundedCornerShape(10.dp),
                                                     colors = ButtonDefaults.filledTonalButtonColors(
@@ -592,7 +638,7 @@ fun LoginGateScreen(
                                                         contentColor = SafetyBlue
                                                     )
                                                 ) {
-                                                    Text("Pilih", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                                    Text(if (isId) "Pilih" else "Select", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                                                 }
                                             }
                                         }
@@ -759,6 +805,68 @@ fun LoginGateScreen(
                 }
             }
 
+            // Database Apps Script Setup (Admin Password Protected)
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = Color(0xFF1E293B).copy(alpha = 0.78f),
+                border = BorderStroke(
+                    1.dp,
+                    if (isGasEnabled) SafetyTeal.copy(alpha = 0.35f) else Color.White.copy(alpha = 0.14f)
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { showDatabaseSetupDialog = true }
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Surface(
+                        shape = CircleShape,
+                        color = if (isGasEnabled) SafetyTeal.copy(alpha = 0.16f) else Color.White.copy(alpha = 0.08f),
+                        modifier = Modifier.size(34.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = if (isDatabaseAdminUnlocked) Icons.Default.LockOpen else Icons.Default.AdminPanelSettings,
+                                contentDescription = null,
+                                tint = if (isGasEnabled) SafetyTeal else Color.White.copy(alpha = 0.7f),
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = if (isId) "Setup Database Apps Script (Khusus Admin)" else "Apps Script Database Setup (Admin Only)",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+                        Text(
+                            text = if (isGasEnabled)
+                                (if (isId) "Status: Aktif • Terhubung ke sheet 'user' & Firestore" else "Status: Active • Linked to 'user' sheet & Firestore")
+                            else
+                                (if (isId) "Status: Nonaktif • Ketuk untuk atur link /exec" else "Status: Disabled • Tap to configure /exec link"),
+                            fontSize = 10.sp,
+                            color = if (isGasEnabled) SafetyTeal else Color.White.copy(alpha = 0.6f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+
+                    Icon(
+                        imageVector = if (isDatabaseAdminUnlocked) Icons.Default.Settings else Icons.Default.Lock,
+                        contentDescription = null,
+                        tint = Color.White.copy(alpha = 0.7f),
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            }
+
             // Security Footnote
             Text(
                 text = if (isId)
@@ -771,6 +879,18 @@ fun LoginGateScreen(
                 lineHeight = 14.sp
             )
         }
+    }
+
+    if (showDatabaseSetupDialog) {
+        DatabaseSetupAdminDialog(
+            language = language,
+            currentUrl = scriptUrl,
+            currentEnabled = isGasEnabled,
+            isAlreadyUnlocked = isDatabaseAdminUnlocked,
+            onUnlock = onUnlockDatabaseAdmin,
+            onSaveAndTest = onSaveAndTestDatabaseSetup,
+            onDismiss = { showDatabaseSetupDialog = false }
+        )
     }
 
     // Forgot Password Dialog
@@ -833,6 +953,290 @@ fun LoginGateScreen(
                             colors = ButtonDefaults.buttonColors(containerColor = SafetyBlue)
                         ) {
                             Text(if (isId) "Kirim Tautan" else "Send Link")
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DatabaseSetupAdminDialog(
+    language: AppLanguage,
+    currentUrl: String,
+    currentEnabled: Boolean,
+    isAlreadyUnlocked: Boolean,
+    onUnlock: (String) -> Boolean,
+    onSaveAndTest: (
+        adminPassword: String,
+        newScriptUrl: String,
+        gasEnabled: Boolean,
+        publishGlobal: Boolean,
+        onResult: (Boolean, String) -> Unit
+    ) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val isId = language == AppLanguage.ID
+    val context = LocalContext.current
+
+    var unlocked by remember(isAlreadyUnlocked) { mutableStateOf(isAlreadyUnlocked) }
+    var adminPassInput by remember { mutableStateOf("") }
+    var showAdminPass by remember { mutableStateOf(false) }
+    var unlockError by remember { mutableStateOf<String?>(null) }
+
+    var urlInput by remember(currentUrl) { mutableStateOf(currentUrl) }
+    var enabledInput by remember(currentEnabled) { mutableStateOf(currentEnabled) }
+    var publishGlobal by remember { mutableStateOf(true) }
+    var isTesting by remember { mutableStateOf(false) }
+    var resultMessage by remember { mutableStateOf<String?>(null) }
+    var resultSuccess by remember { mutableStateOf(false) }
+
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            shape = RoundedCornerShape(22.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            modifier = Modifier.fillMaxWidth(0.98f)
+        ) {
+            Column(
+                modifier = Modifier
+                    .padding(20.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Surface(
+                        shape = CircleShape,
+                        color = (if (unlocked) SafetyTeal else SafetyBlue).copy(alpha = 0.14f),
+                        modifier = Modifier.size(38.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = if (unlocked) Icons.Default.LockOpen else Icons.Default.AdminPanelSettings,
+                                contentDescription = null,
+                                tint = if (unlocked) SafetyTeal else SafetyBlue,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    }
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = if (isId) "Setup Database Apps Script" else "Apps Script Database Setup",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = if (unlocked)
+                                (if (isId) "Mode Admin Terbuka • Siap atur link /exec" else "Admin Mode Unlocked • Ready to configure")
+                            else
+                                (if (isId) "Terkunci • Khusus Admin Database" else "Locked • Database Admin Only"),
+                            fontSize = 11.sp,
+                            color = if (unlocked) SafetyTeal else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    IconButton(onClick = onDismiss, modifier = Modifier.size(28.dp)) {
+                        Icon(Icons.Default.Close, contentDescription = null, modifier = Modifier.size(18.dp))
+                    }
+                }
+
+                if (!unlocked) {
+                    Text(
+                        text = if (isId)
+                            "Masukkan kata sandi Admin untuk membuka pengaturan link Google Apps Script agar konfigurasi database tidak diubah sembarangan."
+                        else
+                            "Enter the Admin password to unlock Google Apps Script URL settings.",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        lineHeight = 16.sp
+                    )
+
+                    OutlinedTextField(
+                        value = adminPassInput,
+                        onValueChange = {
+                            adminPassInput = it
+                            unlockError = null
+                        },
+                        label = { Text(if (isId) "Kata Sandi Admin" else "Admin Password") },
+                        leadingIcon = { Icon(Icons.Default.Key, contentDescription = null, tint = SafetyBlue) },
+                        trailingIcon = {
+                            IconButton(onClick = { showAdminPass = !showAdminPass }) {
+                                Icon(
+                                    imageVector = if (showAdminPass) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                                    contentDescription = null
+                                )
+                            }
+                        },
+                        visualTransformation = if (showAdminPass) VisualTransformation.None else PasswordVisualTransformation(),
+                        singleLine = true,
+                        isError = unlockError != null,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    if (!unlockError.isNullOrBlank()) {
+                        Text(
+                            text = unlockError!!,
+                            fontSize = 11.sp,
+                            color = DangerRed,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End
+                    ) {
+                        TextButton(onClick = onDismiss) {
+                            Text(if (isId) "Batal" else "Cancel")
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Button(
+                            onClick = {
+                                if (onUnlock(adminPassInput)) {
+                                    unlocked = true
+                                    unlockError = null
+                                } else {
+                                    unlockError = if (isId) "Kata sandi Admin salah." else "Incorrect Admin password."
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = SafetyBlue)
+                        ) {
+                            Icon(Icons.Default.LockOpen, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(if (isId) "Buka Kunci" else "Unlock")
+                        }
+                    }
+                } else {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = if (isId) "Gunakan Login & Sync Apps Script" else "Enable Apps Script Auth & Sync",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                text = if (isId) "Verifikasi login & register ke sheet 'user'" else "Verify login & register against 'user' sheet",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(checked = enabledInput, onCheckedChange = { enabledInput = it })
+                    }
+
+                    if (enabledInput) {
+                        OutlinedTextField(
+                            value = urlInput,
+                            onValueChange = { urlInput = it },
+                            label = { Text(if (isId) "URL Web App Apps Script (/exec)" else "Apps Script Web App URL (/exec)") },
+                            placeholder = { Text("https://script.google.com/macros/s/.../exec") },
+                            minLines = 2,
+                            maxLines = 3,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedButton(
+                                onClick = {
+                                    val cb = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                    val pasted = cb.primaryClip?.getItemAt(0)?.text?.toString()?.trim().orEmpty()
+                                    if (pasted.isNotBlank()) urlInput = pasted
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(Icons.Default.ContentPaste, contentDescription = null, modifier = Modifier.size(15.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(if (isId) "Tempel URL" else "Paste URL", fontSize = 11.sp)
+                            }
+                            OutlinedButton(
+                                onClick = { urlInput = GoogleAppsScriptSnippet.DEFAULT_WEBHOOK_URL },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(Icons.Default.RestartAlt, contentDescription = null, modifier = Modifier.size(15.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(if (isId) "Reset Default" else "Reset Default", fontSize = 11.sp)
+                            }
+                        }
+
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { publishGlobal = !publishGlobal },
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Checkbox(checked = publishGlobal, onCheckedChange = { publishGlobal = it })
+                            Text(
+                                text = if (isId) "Sinkronkan ke Config Global Firestore (jika diizinkan)" else "Sync to Global Firestore Config (if permitted)",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    if (!resultMessage.isNullOrBlank()) {
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = (if (resultSuccess) SafetyTeal else DangerRed).copy(alpha = 0.12f),
+                            border = BorderStroke(1.dp, (if (resultSuccess) SafetyTeal else DangerRed).copy(alpha = 0.4f)),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = resultMessage!!,
+                                fontSize = 11.sp,
+                                color = if (resultSuccess) SafetyTeal else DangerRed,
+                                fontWeight = FontWeight.Medium,
+                                modifier = Modifier.padding(10.dp)
+                            )
+                        }
+                    }
+
+                    Button(
+                        onClick = {
+                            isTesting = true
+                            resultMessage = null
+                            onSaveAndTest(adminPassInput, urlInput, enabledInput, publishGlobal) { ok, msg ->
+                                isTesting = false
+                                resultSuccess = ok
+                                resultMessage = msg
+                            }
+                        },
+                        enabled = !isTesting,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = SafetyBlue)
+                    ) {
+                        if (isTesting) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                color = Color.White,
+                                strokeWidth = 2.dp
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(if (isId) "Menghubungkan & Memuat User..." else "Connecting & Loading Users...")
+                        } else {
+                            Icon(Icons.Default.CloudDone, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = if (isId) "Simpan, Tes & Muat Daftar User" else "Save, Test & Load Users",
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+
+                    if (resultSuccess) {
+                        FilledTonalButton(
+                            onClick = onDismiss,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(if (isId) "Selesai & Lanjut Login" else "Done & Continue to Login", fontWeight = FontWeight.Bold)
                         }
                     }
                 }

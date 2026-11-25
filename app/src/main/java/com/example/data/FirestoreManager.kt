@@ -3,6 +3,7 @@ package com.example.data
 import android.content.Context
 import android.util.Log
 import com.google.firebase.firestore.DocumentSnapshot
+import com.google.firebase.firestore.FieldPath
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FirebaseFirestoreSettings
 import com.google.firebase.firestore.ListenerRegistration
@@ -63,10 +64,14 @@ class FirestoreManager(private val context: Context) {
     private val _statusMessage = MutableStateFlow<String?> (null)
     val statusMessage: StateFlow<String?> = _statusMessage.asStateFlow()
 
+    private val _remoteGasConfig = MutableStateFlow<GasRemoteConfig?>(null)
+    val remoteGasConfig: StateFlow<GasRemoteConfig?> = _remoteGasConfig.asStateFlow()
+
     private var usersListener: ListenerRegistration? = null
     private var projectsListener: ListenerRegistration? = null
     private var findingsListener: ListenerRegistration? = null
     private var notificationsListener: ListenerRegistration? = null
+    private var configListener: ListenerRegistration? = null
 
     private val prefs = context.getSharedPreferences("lsr_firestore_prefs", Context.MODE_PRIVATE)
 
@@ -230,8 +235,53 @@ class FirestoreManager(private val context: Context) {
                         }
                     }
                 }
+
+            // Listen to global `system/config` for centralized GAS Webhook URL
+            configListener?.remove()
+            configListener = firestore.collection("system").document("config")
+                .addSnapshotListener { doc, error ->
+                    if (error != null) {
+                        Log.d(tag, "system/config listener note: ${error.message}")
+                        return@addSnapshotListener
+                    }
+                    if (doc != null && doc.exists()) {
+                        val url = doc.getString("gasWebhookUrl")?.trim() ?: ""
+                        if (url.startsWith("http")) {
+                            _remoteGasConfig.value = GasRemoteConfig(
+                                webhookUrl = url,
+                                isGasEnabled = doc.getBoolean("isGasEnabled") ?: true,
+                                updatedBy = doc.getString("updatedBy") ?: "",
+                                updatedAt = doc.getLong("updatedAt") ?: 0L
+                            )
+                        }
+                    }
+                }
         } catch (e: Exception) {
             Log.e(tag, "Error starting Firestore listeners", e)
+        }
+    }
+
+    suspend fun publishGasConfigToFirestore(
+        webhookUrl: String,
+        isGasEnabled: Boolean,
+        updatedBy: String
+    ): Result<Unit> {
+        return withContext(Dispatchers.IO) {
+            try {
+                val payload = mapOf(
+                    "gasWebhookUrl" to webhookUrl.trim(),
+                    "isGasEnabled" to isGasEnabled,
+                    "updatedBy" to updatedBy.ifBlank { "Admin" },
+                    "updatedAt" to System.currentTimeMillis()
+                )
+                firestore.collection("system").document("config")
+                    .set(payload, SetOptions.merge())
+                    .await()
+                Result.success(Unit)
+            } catch (e: Exception) {
+                Log.w(tag, "publishGasConfigToFirestore note: ${e.message}")
+                Result.failure(e)
+            }
         }
     }
 
@@ -518,11 +568,99 @@ class FirestoreManager(private val context: Context) {
         }
     }
 
+    data class FirestoreFindingPageResult(
+        val items: List<FirestoreFindingDocument>,
+        val lastVisibleSnapshot: DocumentSnapshot?,
+        val hasMore: Boolean
+    )
+
+    /**
+     * Cursor-based remote pagination using startAfter(lastVisibleSnapshot) + __name__ tie-breaker.
+     */
+    suspend fun fetchFindingsPageByCursor(
+        projectId: String,
+        statusFilter: String = "ALL",
+        pageSize: Int = 25,
+        lastVisibleSnapshot: DocumentSnapshot? = null
+    ): Result<FirestoreFindingPageResult> = withContext(Dispatchers.IO) {
+        if (projectId.isBlank()) {
+            return@withContext Result.success(FirestoreFindingPageResult(emptyList(), null, false))
+        }
+        try {
+            var query: Query = firestore.collection("projects")
+                .document(projectId)
+                .collection("findings")
+
+            when (statusFilter.uppercase()) {
+                "OPEN", "CLOSED", "REOPENED" -> query = query.whereEqualTo("status", statusFilter.uppercase())
+                "IN_REVIEW" -> query = query.whereEqualTo("status", "IN_REVIEW")
+            }
+
+            query = query
+                .orderBy("createdAt", Query.Direction.DESCENDING)
+                .orderBy(FieldPath.documentId(), Query.Direction.DESCENDING)
+                .limit(pageSize.toLong())
+
+            if (lastVisibleSnapshot != null) {
+                query = query.startAfter(lastVisibleSnapshot)
+            }
+
+            val snap = query.get().await()
+            val docs = snap.documents.mapNotNull { parseFindingDoc(it, projectId) }
+            Result.success(
+                FirestoreFindingPageResult(
+                    items = docs,
+                    lastVisibleSnapshot = snap.documents.lastOrNull(),
+                    hasMore = snap.size() >= pageSize
+                )
+            )
+        } catch (e: Exception) {
+            Log.w(tag, "Cursor page fetch note for $projectId: ${e.message}")
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Delta sync returning changed Firestore findings since [sinceUpdatedAt] for L2 Room merge.
+     */
+    suspend fun fetchFindingsDeltaSince(
+        projectId: String,
+        sinceUpdatedAt: Long,
+        batchLimit: Int = 100
+    ): Result<List<FirestoreFindingDocument>> = withContext(Dispatchers.IO) {
+        if (projectId.isBlank()) return@withContext Result.success(emptyList())
+        try {
+            val baseRef = firestore.collection("projects").document(projectId).collection("findings")
+            val snap = if (sinceUpdatedAt > 0L) {
+                baseRef.whereGreaterThan("updatedAt", sinceUpdatedAt)
+                    .orderBy("updatedAt", Query.Direction.ASCENDING)
+                    .limit(batchLimit.toLong())
+                    .get()
+                    .await()
+            } else {
+                baseRef.orderBy("updatedAt", Query.Direction.DESCENDING)
+                    .limit(batchLimit.toLong())
+                    .get()
+                    .await()
+            }
+            val docs = snap.documents.mapNotNull { parseFindingDoc(it, projectId) }
+            Result.success(docs)
+        } catch (e: Exception) {
+            Log.w(tag, "Delta findings fetch note: ${e.message}")
+            Result.failure(e)
+        }
+    }
+
     private fun parseFindingDoc(doc: DocumentSnapshot, projectId: String): FirestoreFindingDocument? {
         return try {
+            @Suppress("UNCHECKED_CAST")
+            val evidencePhotos = (doc.get("evidencePhotos") as? List<*>)?.mapNotNull { it?.toString() } ?: emptyList()
+            @Suppress("UNCHECKED_CAST")
+            val proofPhotos = (doc.get("proofPhotos") as? List<*>)?.mapNotNull { it?.toString() } ?: emptyList()
             FirestoreFindingDocument(
                 id = doc.getString("id") ?: doc.id,
                 projectId = doc.getString("projectId") ?: projectId,
+                ruleId = doc.getString("ruleId") ?: "",
                 checklistCategory = doc.getString("checklistCategory") ?: "",
                 questionText = doc.getString("questionText") ?: "",
                 description = doc.getString("description") ?: "",
@@ -532,14 +670,22 @@ class FirestoreManager(private val context: Context) {
                 creatorUid = doc.getString("creatorUid") ?: "",
                 creatorName = doc.getString("creatorName") ?: "",
                 creatorEmail = doc.getString("creatorEmail") ?: "",
+                creatorRole = doc.getString("creatorRole") ?: "",
+                creatorCompany = doc.getString("creatorCompany") ?: "",
+                picUid = doc.getString("picUid") ?: "",
                 picName = doc.getString("picName") ?: "",
                 picEmail = doc.getString("picEmail") ?: "",
                 picRole = doc.getString("picRole") ?: "",
+                picCompany = doc.getString("picCompany") ?: "",
+                evidencePhotos = evidencePhotos,
+                proofPhotos = proofPhotos,
                 actionTaken = doc.getString("actionTaken") ?: "",
+                actionEvidenceNotes = doc.getString("actionEvidenceNotes") ?: "",
                 picRating = (doc.getLong("picRating") ?: 0L).toInt(),
                 verificationRemarks = doc.getString("verificationRemarks") ?: "",
+                reopenReason = doc.getString("reopenReason") ?: "",
                 createdAt = doc.getLong("createdAt") ?: 0L,
-                updatedAt = doc.getLong("updatedAt") ?: 0L
+                updatedAt = doc.getLong("updatedAt") ?: (doc.getLong("createdAt") ?: 0L)
             )
         } catch (e: Exception) {
             null

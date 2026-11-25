@@ -20,6 +20,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -60,6 +61,9 @@ fun DashboardScreen(
     onStartClicked: () -> Unit,
     onResetDraftClicked: () -> Unit,
     onNavigateToTab: (AppNavTab) -> Unit,
+    isCloudSyncing: Boolean = false,
+    lastCloudSyncAt: Long = 0L,
+    onSyncNow: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var inputName by remember(inspectorName) { mutableStateOf(inspectorName) }
@@ -114,7 +118,7 @@ fun DashboardScreen(
         checklistItems.groupBy { it.getLocalizedCategory(language) }
     }
 
-    // Pulse animation for live beacon
+    // Pulse animation for live beacon & smooth rotation for background sync
     val infiniteTransition = rememberInfiniteTransition(label = "pulse")
     val beaconAlpha by infiniteTransition.animateFloat(
         initialValue = 0.4f,
@@ -124,6 +128,15 @@ fun DashboardScreen(
             repeatMode = RepeatMode.Reverse
         ),
         label = "beaconAlpha"
+    )
+    val syncRotation by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1000, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "syncRotation"
     )
 
     Column(
@@ -202,63 +215,101 @@ fun DashboardScreen(
             }
         }
 
-        // Live System Beacon Pill
+        // Live System Beacon & Instant Sync Pill
         Surface(
-            shape = RoundedCornerShape(20.dp),
-            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
-            modifier = Modifier.fillMaxWidth()
+            shape = RoundedCornerShape(18.dp),
+            color = if (isCloudSyncing) SafetyBlue.copy(alpha = 0.1f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+            border = BorderStroke(
+                1.dp,
+                if (isCloudSyncing) SafetyBlue.copy(alpha = 0.4f) else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+            ),
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { onSyncNow() }
         ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
+            Column(modifier = Modifier.fillMaxWidth()) {
                 Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(10.dp)
-                            .clip(CircleShape)
-                            .background(SafetyTeal.copy(alpha = beaconAlpha))
-                    )
-                    Text(
-                        text = if (language == AppLanguage.ID) "SISTEM AUDIT AKTIF • IOGP & OSHA" else "AUDIT SYSTEM ACTIVE • IOGP & OSHA",
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        letterSpacing = 0.5.sp
-                    )
-                }
-
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    if (pendingSyncCount > 0) {
-                        Surface(
-                            shape = RoundedCornerShape(8.dp),
-                            color = AmberGold.copy(alpha = 0.18f),
-                            modifier = Modifier.clickable { onNavigateToTab(AppNavTab.FEED) }
-                        ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        if (isCloudSyncing) {
+                            Icon(
+                                imageVector = Icons.Default.Sync,
+                                contentDescription = null,
+                                tint = SafetyBlue,
+                                modifier = Modifier
+                                    .size(14.dp)
+                                    .rotate(syncRotation)
+                            )
                             Text(
-                                text = "⏳ $pendingSyncCount",
+                                text = AppStrings.get("sync_state_syncing", language),
                                 fontSize = 10.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = AmberGold,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                color = SafetyBlue,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        } else {
+                            Box(
+                                modifier = Modifier
+                                    .size(9.dp)
+                                    .clip(CircleShape)
+                                    .background(SafetyTeal.copy(alpha = beaconAlpha))
+                            )
+                            Text(
+                                text = "${if (language == AppLanguage.ID) "CACHE INSTAN" else "INSTANT CACHE"} • ${AppStrings.formatRelativeSync(lastCloudSyncAt, language)}",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                letterSpacing = 0.4.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
                     }
-                    Text(
-                        text = "${checklistItems.size} RULES",
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Black,
-                        color = SafetyBlue
+
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        if (pendingSyncCount > 0) {
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = AmberGold.copy(alpha = 0.18f),
+                                modifier = Modifier.clickable { onNavigateToTab(AppNavTab.FEED) }
+                            ) {
+                                Text(
+                                    text = "⏳ $pendingSyncCount",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = AmberGold,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
+                        Text(
+                            text = "${checklistItems.size} RULES",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Black,
+                            color = SafetyBlue
+                        )
+                    }
+                }
+                AnimatedVisibility(visible = isCloudSyncing) {
+                    LinearProgressIndicator(
+                        color = SafetyBlue,
+                        trackColor = SafetyBlue.copy(alpha = 0.15f),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(2.dp)
                     )
                 }
             }

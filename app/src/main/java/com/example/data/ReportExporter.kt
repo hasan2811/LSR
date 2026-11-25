@@ -244,7 +244,13 @@ object ReportExporter {
     }
 
     internal fun csvEscape(value: String): String {
-        val clean = value.replace("\"", "\"\"").replace("\n", " ")
-        return "\"$clean\""
+        val clean = value.replace("\"", "\"\"").replace("\r", " ").replace("\n", " ")
+        val firstChar = clean.trimStart().firstOrNull()
+        val safe = if (firstChar == '=' || firstChar == '+' || firstChar == '-' || firstChar == '@' || clean.startsWith("\t")) {
+            "'$clean"
+        } else {
+            clean
+        }
+        return "\"$safe\""
     }
 }

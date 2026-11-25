@@ -36,6 +36,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -72,6 +74,8 @@ fun SettingsScreen(
     hapticFeedbackEnabled: Boolean,
     pendingSyncCount: Int = 0,
     onRetryPendingSync: () -> Unit = {},
+    isCloudSyncing: Boolean = false,
+    lastCloudSyncAt: Long = 0L,
     themeMode: AppThemeMode = AppThemeMode.SYSTEM,
     onThemeModeChange: (AppThemeMode) -> Unit = {},
     onToggleNotifPic: (Boolean) -> Unit,
@@ -80,7 +84,10 @@ fun SettingsScreen(
     onToggleHaptic: (Boolean) -> Unit,
     onLanguageChange: (AppLanguage) -> Unit,
     onSaveProfile: (company: String, role: String, cert: String) -> Unit,
-    onSaveCloudSettings: (scriptUrl: String, isGasEnabled: Boolean, firebaseUrl: String, isFirebaseEnabled: Boolean) -> Unit,
+    onSaveCloudSettings: (scriptUrl: String, isGasEnabled: Boolean, firebaseUrl: String, isFirebaseEnabled: Boolean, publishGlobal: Boolean) -> Unit,
+    isDatabaseAdminUnlocked: Boolean = false,
+    onUnlockDatabaseAdmin: (String) -> Boolean = { false },
+    onLockDatabaseAdmin: () -> Unit = {},
     onTestGas: () -> Unit,
     onTestFirebase: () -> Unit,
     onRefreshCloud: () -> Unit,
@@ -173,10 +180,15 @@ fun SettingsScreen(
                     activeProject = activeProject,
                     pendingSyncCount = pendingSyncCount,
                     onRetryPendingSync = onRetryPendingSync,
+                    isCloudSyncing = isCloudSyncing,
+                    lastCloudSyncAt = lastCloudSyncAt,
                     scriptUrl = scriptUrl,
                     isGasEnabled = isGasEnabled,
                     firebaseUrl = firebaseUrl,
                     isFirebaseEnabled = isFirebaseEnabled,
+                    isDatabaseAdminUnlocked = isDatabaseAdminUnlocked,
+                    onUnlockDatabaseAdmin = onUnlockDatabaseAdmin,
+                    onLockDatabaseAdmin = onLockDatabaseAdmin,
                     onOpenProjectDialog = onOpenProjectDialog,
                     onRefreshCloud = onRefreshCloud,
                     onSaveCloudSettings = onSaveCloudSettings,
@@ -872,13 +884,18 @@ private fun CloudSettingsContent(
     activeProject: FirestoreProject?,
     pendingSyncCount: Int,
     onRetryPendingSync: () -> Unit,
+    isCloudSyncing: Boolean = false,
+    lastCloudSyncAt: Long = 0L,
     scriptUrl: String,
     isGasEnabled: Boolean,
     firebaseUrl: String,
     isFirebaseEnabled: Boolean,
+    isDatabaseAdminUnlocked: Boolean,
+    onUnlockDatabaseAdmin: (String) -> Boolean,
+    onLockDatabaseAdmin: () -> Unit,
     onOpenProjectDialog: () -> Unit,
     onRefreshCloud: () -> Unit,
-    onSaveCloudSettings: (scriptUrl: String, isGasEnabled: Boolean, firebaseUrl: String, isFirebaseEnabled: Boolean) -> Unit,
+    onSaveCloudSettings: (scriptUrl: String, isGasEnabled: Boolean, firebaseUrl: String, isFirebaseEnabled: Boolean, publishGlobal: Boolean) -> Unit,
     onTestGas: () -> Unit,
     onTestFirebase: () -> Unit,
     onOpenGasGuide: () -> Unit
@@ -888,42 +905,58 @@ private fun CloudSettingsContent(
     var inputGasEnabled by remember(isGasEnabled) { mutableStateOf(isGasEnabled) }
     var inputFirebaseUrl by remember(firebaseUrl) { mutableStateOf(firebaseUrl) }
     var inputFirebaseEnabled by remember(isFirebaseEnabled) { mutableStateOf(isFirebaseEnabled) }
+    var publishGlobal by remember { mutableStateOf(true) }
+    var showUnlockBox by remember { mutableStateOf(false) }
+    var adminPassInput by remember { mutableStateOf("") }
+    var adminPassVisible by remember { mutableStateOf(false) }
+    var adminUnlockError by remember { mutableStateOf<String?>(null) }
 
-    // Outbox Sync Queue Card
+    // Outbox Sync Queue & Instant Cache Card
     Surface(
         shape = RoundedCornerShape(16.dp),
         color = if (pendingSyncCount > 0) AmberGold.copy(alpha = 0.12f) else SafetyTeal.copy(alpha = 0.1f),
         border = BorderStroke(1.dp, if (pendingSyncCount > 0) AmberGold.copy(alpha = 0.4f) else SafetyTeal.copy(alpha = 0.35f)),
         modifier = Modifier.fillMaxWidth()
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 12.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = if (pendingSyncCount > 0)
-                        "${AppStrings.get("feed_pending_sync", language)}: $pendingSyncCount item"
-                    else
-                        (if (isId) "Semua data lokal sudah tersinkron" else "All local records synced"),
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Bold
-                )
-                Text(
-                    text = if (isId) "WorkManager otomatis menyinkronkan saat koneksi tersedia" else "WorkManager automatically syncs when online",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            if (pendingSyncCount > 0) {
-                FilledTonalButton(onClick = onRetryPendingSync) {
-                    Text(AppStrings.get("feed_sync_now", language), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = if (pendingSyncCount > 0)
+                            "${AppStrings.get("feed_pending_sync", language)}: $pendingSyncCount item"
+                        else
+                            AppStrings.get("sync_state_instant", language),
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "${AppStrings.get("sync_last_at", language)}: ${AppStrings.formatRelativeSync(lastCloudSyncAt, language)} • Room + 100MB Cache",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
-            } else {
-                Icon(Icons.Default.CloudDone, contentDescription = null, tint = SafetyTeal)
+                if (pendingSyncCount > 0) {
+                    FilledTonalButton(onClick = onRetryPendingSync) {
+                        Text(AppStrings.get("feed_sync_now", language), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                } else {
+                    Icon(Icons.Default.CloudDone, contentDescription = null, tint = SafetyTeal)
+                }
+            }
+            if (isCloudSyncing) {
+                LinearProgressIndicator(
+                    color = SafetyBlue,
+                    trackColor = SafetyBlue.copy(alpha = 0.15f),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(2.dp)
+                )
             }
         }
     }
@@ -990,11 +1023,15 @@ private fun CloudSettingsContent(
         }
     }
 
-    // Google Apps Script Card
+    // Google Apps Script Card (Admin Lock Protected)
     Card(
         shape = RoundedCornerShape(18.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+        border = BorderStroke(
+            1.dp,
+            if (isDatabaseAdminUnlocked) SafetyTeal.copy(alpha = 0.5f)
+            else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+        ),
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(
@@ -1018,19 +1055,143 @@ private fun CloudSettingsContent(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                Switch(checked = inputGasEnabled, onCheckedChange = { inputGasEnabled = it })
+                Switch(
+                    checked = inputGasEnabled,
+                    enabled = isDatabaseAdminUnlocked,
+                    onCheckedChange = { inputGasEnabled = it }
+                )
+            }
+
+            // Admin Lock Status / Unlock Bar
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = (if (isDatabaseAdminUnlocked) SafetyTeal else AmberGold).copy(alpha = 0.1f),
+                border = BorderStroke(
+                    1.dp,
+                    (if (isDatabaseAdminUnlocked) SafetyTeal else AmberGold).copy(alpha = 0.35f)
+                ),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(
+                                imageVector = if (isDatabaseAdminUnlocked) Icons.Default.LockOpen else Icons.Default.Lock,
+                                contentDescription = null,
+                                tint = if (isDatabaseAdminUnlocked) SafetyTeal else AmberGold,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Text(
+                                text = if (isDatabaseAdminUnlocked)
+                                    (if (isId) "Mode Admin Terbuka (dapat edit URL)" else "Admin Unlocked (URL editable)")
+                                else
+                                    (if (isId) "URL database dikunci (khusus Admin)" else "Database URL locked (Admin only)"),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                        if (isDatabaseAdminUnlocked) {
+                            TextButton(
+                                onClick = {
+                                    onLockDatabaseAdmin()
+                                    showUnlockBox = false
+                                },
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                            ) {
+                                Text(if (isId) "Kunci" else "Lock", fontSize = 11.sp)
+                            }
+                        } else {
+                            TextButton(
+                                onClick = { showUnlockBox = !showUnlockBox },
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                            ) {
+                                Text(if (isId) "Buka Kunci" else "Unlock", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+
+                    if (showUnlockBox && !isDatabaseAdminUnlocked) {
+                        OutlinedTextField(
+                            value = adminPassInput,
+                            onValueChange = {
+                                adminPassInput = it
+                                adminUnlockError = null
+                            },
+                            label = { Text(if (isId) "Kata Sandi Admin" else "Admin Password") },
+                            trailingIcon = {
+                                IconButton(onClick = { adminPassVisible = !adminPassVisible }) {
+                                    Icon(
+                                        imageVector = if (adminPassVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                                        contentDescription = null
+                                    )
+                                }
+                            },
+                            visualTransformation = if (adminPassVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                            singleLine = true,
+                            isError = adminUnlockError != null,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        if (!adminUnlockError.isNullOrBlank()) {
+                            Text(adminUnlockError!!, fontSize = 11.sp, color = DangerRed)
+                        }
+                        Button(
+                            onClick = {
+                                if (onUnlockDatabaseAdmin(adminPassInput)) {
+                                    adminPassInput = ""
+                                    showUnlockBox = false
+                                    adminUnlockError = null
+                                } else {
+                                    adminUnlockError = if (isId) "Kata sandi Admin salah." else "Incorrect Admin password."
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = SafetyBlue),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(if (isId) "Verifikasi & Buka Kunci" else "Verify & Unlock", fontSize = 12.sp)
+                        }
+                    }
+                }
             }
 
             if (inputGasEnabled) {
                 OutlinedTextField(
                     value = inputScriptUrl,
                     onValueChange = { inputScriptUrl = it },
+                    enabled = isDatabaseAdminUnlocked,
                     label = { Text(AppStrings.get("gas_url_label", language)) },
                     placeholder = { Text("https://script.google.com/macros/s/.../exec") },
                     singleLine = true,
                     shape = RoundedCornerShape(12.dp),
                     modifier = Modifier.fillMaxWidth()
                 )
+                if (isDatabaseAdminUnlocked) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { publishGlobal = !publishGlobal },
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Checkbox(checked = publishGlobal, onCheckedChange = { publishGlobal = it })
+                        Text(
+                            text = if (isId) "Terapkan ke Config Global Firestore (semua perangkat)" else "Publish to Global Firestore Config (all devices)",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -1053,6 +1214,24 @@ private fun CloudSettingsContent(
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(AppStrings.get("gas_guide_btn", language), style = MaterialTheme.typography.labelMedium, maxLines = 1)
                     }
+                }
+                FilledTonalButton(
+                    onClick = {
+                        if (isDatabaseAdminUnlocked) {
+                            onSaveCloudSettings(inputScriptUrl, inputGasEnabled, inputFirebaseUrl, inputFirebaseEnabled, publishGlobal)
+                        }
+                        onRetryPendingSync()
+                    },
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.filledTonalButtonColors(
+                        containerColor = SafetyBlue.copy(alpha = 0.12f),
+                        contentColor = SafetyBlue
+                    )
+                ) {
+                    Icon(Icons.Default.CloudSync, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(AppStrings.get("sync_pull_gas_btn", language), fontWeight = FontWeight.Bold)
                 }
             }
         }
@@ -1133,7 +1312,7 @@ private fun CloudSettingsContent(
 
     Button(
         onClick = {
-            onSaveCloudSettings(inputScriptUrl, inputGasEnabled, inputFirebaseUrl, inputFirebaseEnabled)
+            onSaveCloudSettings(inputScriptUrl, inputGasEnabled, inputFirebaseUrl, inputFirebaseEnabled, publishGlobal)
         },
         shape = RoundedCornerShape(12.dp),
         colors = ButtonDefaults.buttonColors(containerColor = SafetyBlue),

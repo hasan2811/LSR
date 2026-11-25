@@ -60,6 +60,7 @@ fun FindingDetailScreen(
     onSendMessage: (String) -> Unit = {},
     onSendReminder: () -> Unit = {},
     onDeleteFinding: () -> Unit,
+    canManageFinding: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -195,9 +196,11 @@ fun FindingDetailScreen(
                             Icon(Icons.Default.Share, contentDescription = "Share", tint = MaterialTheme.colorScheme.primary)
                         }
 
-                        // Delete option
-                        IconButton(onClick = { showDeleteConfirmDialog = true }) {
-                            Icon(Icons.Default.DeleteOutline, contentDescription = "Delete", tint = DangerRed)
+                        // Delete option (RBAC: Lead/Auditor only, non-PIC)
+                        if (canManageFinding) {
+                            IconButton(onClick = { showDeleteConfirmDialog = true }) {
+                                Icon(Icons.Default.DeleteOutline, contentDescription = "Delete", tint = DangerRed)
+                            }
                         }
                     }
                 }
@@ -437,13 +440,15 @@ fun FindingDetailScreen(
                             )
                         }
 
-                        TextButton(
-                            onClick = { showAssignPicDialog = true },
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
-                        ) {
-                            Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(14.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Ganti PIC", fontSize = 12.sp)
+                        if (canManageFinding) {
+                            TextButton(
+                                onClick = { showAssignPicDialog = true },
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                            ) {
+                                Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(14.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Ganti PIC", fontSize = 12.sp)
+                            }
                         }
                     }
 
@@ -706,6 +711,32 @@ fun FindingDetailScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
 
+                    if (!canManageFinding) {
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = AmberGold.copy(alpha = 0.12f),
+                            border = BorderStroke(1.dp, AmberGold.copy(alpha = 0.4f)),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Icon(Icons.Default.Lock, contentDescription = null, tint = AmberGold, modifier = Modifier.size(18.dp))
+                                Text(
+                                    text = if (language == AppLanguage.ID) {
+                                        "Mode Baca-Saja (Segregation of Duties): Penutupan, penolakan, atau penghapusan temuan hanya dapat dilakukan oleh Auditor/Lead K3 yang bukan PIC temuan ini."
+                                    } else {
+                                        "Read-Only (Segregation of Duties): Only an authorized HSE Lead/Auditor who is not the assigned PIC can verify, close, reopen, or delete this finding."
+                                    },
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    lineHeight = 15.sp
+                                )
+                            }
+                        }
+                    } else {
                     // Toggle: Satisfied (Close & Rate) vs Rejected (Reopen)
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -854,6 +885,7 @@ fun FindingDetailScreen(
                                 )
                             }
                         }
+                    }
                     }
                 }
             }

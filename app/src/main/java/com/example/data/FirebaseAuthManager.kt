@@ -242,8 +242,10 @@ class FirebaseAuthManager(private val context: Context) {
             rawMsg.contains("There is no user record", ignoreCase = true) ||
             rawMsg.contains("INVALID_LOGIN_CREDENTIALS", ignoreCase = true) ||
             rawMsg.contains("WRONG_PASSWORD", ignoreCase = true) ||
-            rawMsg.contains("USER_NOT_FOUND", ignoreCase = true) -> {
-                Exception(if (isId) "Email atau kata sandi salah. Pastikan data akun benar." else "Invalid email or password. Please verify your credentials.")
+            rawMsg.contains("USER_NOT_FOUND", ignoreCase = true) ||
+            rawMsg.contains("supplied auth credential is incorrect", ignoreCase = true) ||
+            rawMsg.contains("malformed or has expired", ignoreCase = true) -> {
+                Exception(if (isId) "Email atau kata sandi salah, atau akun belum terdaftar." else "Invalid email or password, or account not registered.")
             }
             rawMsg.contains("The email address is badly formatted", ignoreCase = true) ||
             rawMsg.contains("INVALID_EMAIL", ignoreCase = true) -> {
